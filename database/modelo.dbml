@@ -1,0 +1,178 @@
+// Sistema Automotivo — Modelo de dados v7
+// Padrão: snake_case, tabelas no plural, FK à esquerda nas Refs, enums sem acento
+
+Enum status_orcamento {
+  PENDENTE
+  APROVADO
+  RECUSADO
+}
+
+Enum grupo_item {
+  FLUIDOS
+  FILTROS
+  FREIOS
+  MOTOR
+  INJECAO
+  SUSPENSAO
+  ELETRICA
+  TRANSMISSAO
+  SERVICOS
+}
+
+Enum fonte_preco {
+  MANUAL
+  HISTORICO
+  EXTERNO
+}
+
+Enum tipo_item {
+  PECA
+  MAO_OBRA
+}
+
+Enum tipo_alerta {
+  TROCA_RECENTE
+  PRECO_ACIMA_MEDIA
+  MAO_OBRA_ALTA
+  ITEM_DUPLICADO
+  ITEM_GENERICO
+  CONSUMIVEL_CARO
+  VALOR_ZERADO
+}
+
+Enum severidade_alerta {
+  ALTA
+  MEDIA
+  BAIXA
+}
+
+Enum tipo_manutencao {
+  PREVENTIVA
+  CORRETIVA
+  PREDITIVA
+}
+
+Enum status_manutencao {
+  EM_ANDAMENTO
+  CONCLUIDA
+}
+
+Table precos_referencia {
+  id integer [pk, increment]
+  id_categoria integer [not null, ref: > categorias_item.id]
+  codigo_peca varchar(50)
+  descricao varchar(255) [not null]
+  valor_min numeric(10,2) [not null]
+  valor_max numeric(10,2) [not null]
+  fonte fonte_preco [not null, default: 'MANUAL']
+  amostras integer [not null, default: 1]
+  atualizado_em timestamptz [not null, default: `now()`]
+
+  indexes {
+    id_categoria
+    codigo_peca
+    (id_categoria, codigo_peca, fonte) [unique]
+  }
+
+  Note: 'valor_min <= valor_max (CHECK na migração). Unique exige NULLS NOT DISTINCT no PG15+'
+}
+
+Table usuarios {
+  id integer [pk, increment]
+  nome varchar(100) [not null]
+  email varchar(150) [not null, unique]
+  senha_hash varchar(255) [not null]
+  criado_em timestamptz [not null, default: `now()`]
+}
+
+Table veiculos {
+  id integer [pk, increment]
+  id_usuario integer [not null, ref: > usuarios.id]
+  marca varchar(50) [not null]
+  modelo varchar(80) [not null]
+  motor varchar(30)
+  placa varchar(10)
+  ano_fabricacao smallint [not null]
+  ano_modelo smallint
+  km_atual integer [not null, default: 0]
+  criado_em timestamptz [not null, default: `now()`]
+
+  indexes {
+    id_usuario
+  }
+}
+
+Table oficinas {
+  id integer [pk, increment]
+  nome varchar(120) [not null]
+  cidade varchar(80)
+  telefone varchar(20)
+  criado_em timestamptz [not null, default: `now()`]
+}
+
+Table orcamentos {
+  id integer [pk, increment]
+  id_veiculo integer [not null, ref: > veiculos.id]
+  id_oficina integer [not null, ref: > oficinas.id]
+  data_emissao date [not null]
+  km integer [not null]
+  status status_orcamento [not null, default: 'PENDENTE']
+  arquivo_url varchar(255) [note: 'Foto/PDF enviado (nulo se lançado manualmente)']
+  texto_extraido text [note: 'Retorno da IA, guardado para não pagar a extração duas vezes']
+  criado_em timestamptz [not null, default: `now()`]
+
+  indexes {
+    id_veiculo
+    id_oficina
+    (id_veiculo, data_emissao)
+  }
+
+  Note: 'Valor total NÃO é guardado: é calculado pela soma dos itens'
+}
+
+Table categorias_item {
+  id integer [pk, increment]
+  nome varchar(100) [not null, unique]
+  grupo grupo_item [not null]
+  intervalo_km integer [note: 'Nulo = sem intervalo (ex.: mão de obra)']
+  intervalo_meses integer
+}
+
+Table itens_orcamento {
+  id integer [pk, increment]
+  id_orcamento integer [not null, ref: > orcamentos.id]
+  id_categoria integer [not null, ref: > categorias_item.id]
+  descricao varchar(255) [not null, note: 'Texto original escrito pela oficina']
+  tipo tipo_item [not null]
+  quantidade numeric(10,2) [not null, default: 1]
+  valor_unitario numeric(10,2) [not null]
+
+  indexes {
+    id_orcamento
+    id_categoria
+  }
+}
+
+Table alertas {
+  id integer [pk, increment]
+  id_orcamento integer [not null, ref: > orcamentos.id]
+  id_item integer [ref: > itens_orcamento.id, note: 'Nulo = alerta do orçamento inteiro (ex.: mão de obra alta)']
+  tipo tipo_alerta [not null]
+  severidade severidade_alerta [not null]
+  mensagem varchar(255) [not null]
+  criado_em timestamptz [not null, default: `now()`]
+
+  indexes {
+    id_orcamento
+  }
+}
+
+Table manutencoes {
+  id integer [pk, increment]
+  id_orcamento integer [not null, unique, ref: > orcamentos.id, note: 'unique = 1 orçamento gera no máximo 1 manutenção']
+  data date [not null]
+  km integer [not null]
+  tipo tipo_manutencao [not null]
+  status status_manutencao [not null, default: 'CONCLUIDA']
+  criado_em timestamptz [not null, default: `now()`]
+}
