@@ -23,7 +23,7 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 
 ## Modelo de dados
 
-![Diagrama do banco de dados](database/diagrama.png)
+![Diagrama do banco de dados](database/diagrama.pdf)
 
 | Tabela | Função |
 |---|---|
