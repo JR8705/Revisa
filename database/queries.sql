@@ -1,7 +1,5 @@
 -- Revisa — Consultas principais
 
--- Base: base-teste-v7.sql (resultados esperados calculados sobre ela)
-
 -- Os valores fixos marcados com "parâmetro" viram variáveis na API.
 
 
