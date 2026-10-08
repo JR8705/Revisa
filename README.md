@@ -76,6 +76,34 @@ Os arquivos devem ser executados nessa ordem. Também é possível abri-los em u
 
 O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o resultado esperado em comentário.
 
+## Protótipo em terminal
+
+Antes da API, a lógica de cálculo e de alertas está sendo validada em um programa de terminal, sem banco de dados e sem bibliotecas externas.
+
+O `exercicios/analisador_orcamento.py`:
+
+- cadastra os itens de um orçamento (descrição, tipo, quantidade e valor unitário)
+- valida a entrada: recusa texto no lugar de número, valores negativos e tipo inexistente, e aceita vírgula como separador decimal
+- calcula o total e separa peças de mão de obra, com o percentual de cada um
+- alerta quando a mão de obra passa do limite informado
+
+Os valores usam `Decimal`, pelo mesmo motivo do `numeric(10,2)` no banco: evitar erro de arredondamento com dinheiro. Os tipos seguem os códigos do enum `tipo_item` (`PECA` e `MAO_OBRA`).
+
+Para rodar (Python 3.10 ou superior):
+
+```bash
+python exercicios/analisador_orcamento.py
+```
+
+Exemplo, com os itens do orçamento 5 do `seed.sql`:
+
+```
+Orçamento total de: R$685.00
+Valor Peça: R$335.00 (48.91%)
+Valor Mão de obra: R$350.00 (51.09%)
+ALERTA: Mão de obra de 51.09% do total! Limite de 50%
+```
+
 ## Estrutura do repositório
 
 ```
@@ -85,11 +113,15 @@ database/
  ├── queries.sql     consultas de validação com o resultado esperado
  ├── modelo.dbml     código-fonte do diagrama (dbdiagram.io)
  └── diagrama.png    diagrama do banco
+
+exercicios/
+ └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 ```
 
 ## Roadmap
 
 - [x] Modelagem do banco de dados
+- [x] Protótipo em terminal do cálculo e do alerta de mão de obra
 - [ ] API: autenticação e cadastro de veículos
 - [ ] Orçamentos, itens e histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
