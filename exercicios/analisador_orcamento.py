@@ -29,10 +29,13 @@ def calcular_perc(valor_mao,valor_peca,total):
     p2 = (valor_peca/total)
     return p1, p2
 
-def gerar_alertas(perc2, perc_aviso):
+def gerar_alertas(perc2, perc_alerta):
+    alertas = []
 
-    if perc2 > perc_aviso/100:
-        print(f"ALERTA: Mão de obra de {perc2*100:.2f}% do total! Limite de {perc_aviso}%")
+    if perc2 > perc_alerta/100:
+        alertas.append(f'ALERTA: Mão de obra de {perc2*100:.2f}% do total! Limite de {perc_alerta}%')
+
+    return alertas
 
 def ler_decimal(mensagem):
     while True:
@@ -83,13 +86,21 @@ while True:
     if continuar == 'n':
         break
 
-aviso = ler_decimal("Porcentagem para o aviso: ")
+limite_mao_obra = ler_decimal("Porcentagem para o alerta: ")
 
 orcamento_total,valor_mao,valor_peca = calcular_orcamento(itens)
 perc_mao, perc_peca = calcular_perc(valor_mao, valor_peca, orcamento_total)
 
-print(f'Orçamento total de: R${orcamento_total:.2f}')
+print(f'\nOrçamento total de: R${orcamento_total:.2f}')
 print(f'Valor Peça: R${valor_peca:.2f} ({perc_peca:.2%})')
 print(f'Valor Mão de obra: R${valor_mao:.2f} ({perc_mao:.2%})')
 
-gerar_alertas(perc_mao, aviso)
+
+
+alertas = gerar_alertas(perc_mao, limite_mao_obra)
+print()
+if not alertas:
+    print('Nenhum alerta encontrado!')
+else:
+    for alerta in alertas:
+        print(alerta)
