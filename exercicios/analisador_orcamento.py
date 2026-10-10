@@ -63,17 +63,15 @@ def ler_decimal(mensagem):
             print('Erro! Digite apenas números válidos.')
 
 def ler_tipo(mensagem):
+    tipos = {'1': 'MAO_OBRA',
+            '2': 'PECA'}
     while True:
 
-        entrada_mensagem = input(mensagem).strip().lower()
-        if entrada_mensagem not in ['1','2']:
-            print('Erro! Digite um tipo de item válido.')
+        entrada_mensagem = input(mensagem).strip()
+        if entrada_mensagem in tipos:
+            return tipos[entrada_mensagem]
         else:
-            if entrada_mensagem == '1':
-                entrada_mensagem = 'MAO_OBRA'
-            else:
-                entrada_mensagem = 'PECA'
-            return entrada_mensagem
+            print('Erro! Digite um tipo de item válido.')
 
 print('--- CADASTRO DE ITENS DO ORÇAMENTO ---')
 
