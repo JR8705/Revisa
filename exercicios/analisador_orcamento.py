@@ -40,6 +40,9 @@ def gerar_alertas(perc2, perc_alerta,itens):
             alertas.append(f'Alerta! Item duplicado: {descricao}')
         else:
             desc_vistas.append(descricao)
+        
+        if item['valor'] == 0:
+            alertas.append(f'Alerta! Item com valor zerado: {descricao}')
 
     if perc2 > perc_alerta/100:
         alertas.append(f'ALERTA: Mão de obra de {perc2*100:.2f}% do total! Limite de {perc_alerta}%')
