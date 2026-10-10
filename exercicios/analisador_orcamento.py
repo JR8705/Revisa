@@ -29,8 +29,17 @@ def calcular_perc(valor_mao,valor_peca,total):
     p2 = (valor_peca/total)
     return p1, p2
 
-def gerar_alertas(perc2, perc_alerta):
+def gerar_alertas(perc2, perc_alerta,itens):
     alertas = []
+    desc_vistas = []
+
+    for item in itens:
+        descricao_entrada = item['descricao']
+        descricao = descricao_entrada.strip().lower()
+        if descricao in desc_vistas:
+            alertas.append(f'Alerta! Item duplicado: {descricao}')
+        else:
+            desc_vistas.append(descricao)
 
     if perc2 > perc_alerta/100:
         alertas.append(f'ALERTA: Mão de obra de {perc2*100:.2f}% do total! Limite de {perc_alerta}%')
@@ -97,7 +106,7 @@ print(f'Valor Mão de obra: R${valor_mao:.2f} ({perc_mao:.2%})')
 
 
 
-alertas = gerar_alertas(perc_mao, limite_mao_obra)
+alertas = gerar_alertas(perc_mao, limite_mao_obra,itens)
 print()
 if not alertas:
     print('Nenhum alerta encontrado!')
