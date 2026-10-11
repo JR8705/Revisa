@@ -8,7 +8,7 @@ def calcular_orcamento(itens):
     
     for item in itens:
 
-        subtotal = item['valor'] * item['quantidade']
+        subtotal = item['valor_unitario'] * item['quantidade']
 
         orcamento_total += subtotal
 
@@ -23,11 +23,11 @@ def calcular_perc(valor_mao,valor_peca,total):
     if total == 0:
         return Decimal('0.00'), Decimal('0.00')
     
-    p1 = (valor_mao/total)
-    p2 = (valor_peca/total)
-    return p1, p2
+    perc_mao = (valor_mao/total)
+    perc_peca = (valor_peca/total)
+    return perc_mao, perc_peca
 
-def gerar_alertas(perc2, perc_alerta,itens):
+def gerar_alertas(perc_mao, limite_mao_obra,itens):
     alertas = []
     desc_vistas = []
 
@@ -35,15 +35,15 @@ def gerar_alertas(perc2, perc_alerta,itens):
         descricao_entrada = item['descricao']
         descricao = descricao_entrada.strip().lower()
         if descricao in desc_vistas:
-            alertas.append(f'Alerta! Item duplicado: {descricao}')
+            alertas.append(f'ALERTA! Item duplicado: {descricao_entrada}')
         else:
             desc_vistas.append(descricao)
         
-        if item['valor'] == 0:
-            alertas.append(f'Alerta! Item com valor zerado: {descricao}')
+        if item['valor_unitario'] == 0:
+            alertas.append(f'ALERTA! Item com valor zerado: {descricao_entrada}')
 
-    if perc2 > perc_alerta/100:
-        alertas.append(f'ALERTA: Mão de obra de {perc2*100:.2f}% do total! Limite de {perc_alerta}%')
+    if perc_mao > limite_mao_obra/100:
+        alertas.append(f'ALERTA! Mão de obra de {perc_mao*100:.2f}% do total! Limite de {limite_mao_obra}%')
 
     return alertas
 
@@ -53,7 +53,7 @@ def ler_decimal(mensagem):
             entrada_mensagem = input(mensagem).replace(',','.')
             entrada_mensagem = Decimal(entrada_mensagem)
             if entrada_mensagem < 0:
-                print('Erro! Digite apenas números positivos.')
+                 print('Erro! Digite apenas números positivos.')
             else:
                 return entrada_mensagem
 
@@ -71,9 +71,10 @@ def ler_tipo(mensagem):
         else:
             print('Erro! Digite um tipo de item válido.')
 
-print('--- CADASTRO DE ITENS DO ORÇAMENTO ---')
+
 
 def cadastrar_itens():
+    print('--- CADASTRO DE ITENS DO ORÇAMENTO ---')
     itens = []
     while True:
     
@@ -87,7 +88,7 @@ def cadastrar_itens():
             'descricao': descricao,
             'tipo': tipo,
             'quantidade': quantidade,
-            'valor': valor_unitario
+            'valor_unitario': valor_unitario
         }
 
         itens.append(novo_item)
