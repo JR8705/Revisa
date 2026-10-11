@@ -52,11 +52,13 @@ def ler_decimal(mensagem):
         try:
             entrada_mensagem = input(mensagem).replace(',','.')
             entrada_mensagem = Decimal(entrada_mensagem)
-            if entrada_mensagem < 0:
-                 print('Erro! Digite apenas números positivos.')
+            if entrada_mensagem.is_finite():
+                if entrada_mensagem < 0:
+                    print('Erro! Digite apenas números positivos.')
+                else:
+                    return entrada_mensagem
             else:
-                return entrada_mensagem
-
+                print('Erro! Digite um número finito.')
         except InvalidOperation:
             print('Erro! Digite apenas números válidos.')
 
