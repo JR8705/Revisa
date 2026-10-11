@@ -83,11 +83,17 @@ Antes da API, a lógica de cálculo e de alertas está sendo validada em um prog
 O `exercicios/analisador_orcamento.py`:
 
 - cadastra os itens de um orçamento (descrição, tipo, quantidade e valor unitário)
-- valida a entrada: recusa texto no lugar de número, valores negativos e tipo inexistente, e aceita vírgula como separador decimal
+- valida a entrada: recusa texto no lugar de número, valores negativos, infinitos e tipo inexistente, e aceita vírgula como separador decimal
 - calcula o total e separa peças de mão de obra, com o percentual de cada um
-- alerta quando a mão de obra passa do limite informado
+- gera três dos alertas planejados para a API:
 
-Os valores usam `Decimal`, pelo mesmo motivo do `numeric(10,2)` no banco: evitar erro de arredondamento com dinheiro. Os tipos seguem os códigos do enum `tipo_item` (`PECA` e `MAO_OBRA`).
+| Alerta | Regra no protótipo |
+|---|---|
+| Mão de obra alta | Percentual de mão de obra acima do limite informado |
+| Item duplicado | Mesma descrição lançada mais de uma vez, sem diferenciar maiúsculas nem espaços nas pontas |
+| Valor zerado | Item com valor unitário igual a zero |
+
+As funções de cálculo e de alertas recebem dados e devolvem dados, sem ler o teclado nem imprimir na tela. Assim, a mesma lógica pode ser reaproveitada na API, com os itens vindos do banco. Os valores usam `Decimal`, pelo mesmo motivo do `numeric(10,2)` no banco: evitar erro de arredondamento com dinheiro. Os tipos seguem os códigos do enum `tipo_item` (`PECA` e `MAO_OBRA`).
 
 Para rodar (Python 3.10 ou superior):
 
@@ -95,13 +101,14 @@ Para rodar (Python 3.10 ou superior):
 python exercicios/analisador_orcamento.py
 ```
 
-Exemplo, com os itens do orçamento 5 do `seed.sql`:
+Exemplo com os itens do orçamento 3 do `seed.sql`, em que a bomba d'água foi lançada duas vezes (limite de mão de obra: 50%):
 
 ```
-Orçamento total de: R$685.00
-Valor Peça: R$335.00 (48.91%)
-Valor Mão de obra: R$350.00 (51.09%)
-ALERTA: Mão de obra de 51.09% do total! Limite de 50%
+Orçamento total de: R$1900.00
+Valor Peça: R$1450.00 (76.32%)
+Valor Mão de obra: R$450.00 (23.68%)
+
+ALERTA! Item duplicado: bomba d'água
 ```
 
 ## Estrutura do repositório
@@ -121,7 +128,7 @@ exercicios/
 ## Roadmap
 
 - [x] Modelagem do banco de dados
-- [x] Protótipo em terminal do cálculo e do alerta de mão de obra
+- [x] Protótipo em terminal do cálculo e dos alertas
 - [ ] API: autenticação e cadastro de veículos
 - [ ] Orçamentos, itens e histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
