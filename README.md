@@ -76,6 +76,27 @@ Os arquivos devem ser executados nessa ordem. Também é possível abri-los em u
 
 O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o resultado esperado em comentário.
 
+## Como rodar a API
+
+> Em construção: por enquanto, a API tem apenas as rotas iniciais, ainda sem acesso ao banco.
+
+Pré-requisito: Python 3.10 ou superior.
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate       # Linux e macOS
+pip install -r requirements.txt
+uvicorn api.main:app --reload
+```
+
+Com o servidor rodando, a documentação interativa da API fica em `http://127.0.0.1:8000/docs`.
+
+| Rota | Descrição |
+|---|---|
+| `GET /` | Verifica se a API está no ar |
+| `GET /veiculos/{veiculo_id}` | Rota inicial de veículos (o identificador é validado como número inteiro) |
+
 ## Protótipo em terminal
 
 Antes da API, a lógica de cálculo e de alertas está sendo validada em um programa de terminal, sem banco de dados e sem bibliotecas externas.
@@ -121,8 +142,13 @@ database/
  ├── modelo.dbml     código-fonte do diagrama (dbdiagram.io)
  └── diagrama.png    diagrama do banco
 
+api/
+ └── main.py         aplicação FastAPI e rotas
+
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
+
+requirements.txt     dependências Python com as versões fixadas
 ```
 
 ## Roadmap
