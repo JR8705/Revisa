@@ -2,7 +2,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API está em construção.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API está em construção e já consulta o banco.
 
 ## O problema
 
@@ -78,15 +78,29 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: por enquanto, a API tem apenas as rotas iniciais, ainda sem acesso ao banco.
+> Em construção: a API já busca veículos no banco; as demais rotas ainda serão criadas.
 
-Pré-requisito: Python 3.10 ou superior.
+Pré-requisitos: Python 3.10 ou superior e o banco criado conforme a seção anterior.
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows
 source .venv/bin/activate       # Linux e macOS
 pip install -r requirements.txt
+```
+
+A conexão com o banco é lida da variável de ambiente `DATABASE_URL`, nunca escrita no código. Copie o modelo e preencha com os dados do seu PostgreSQL:
+
+```bash
+cp .env.example .env            # Windows: copy .env.example .env
+```
+
+O `.env` está no `.gitignore`, então a senha não vai para o repositório. Se a variável estiver faltando, a API para na inicialização com uma mensagem que cita apenas o nome da variável, sem expor o valor.
+
+Para testar a conexão e subir o servidor:
+
+```bash
+python api/database.py          # deve imprimir: Conexão bem-sucedida! O banco respondeu: 1
 uvicorn api.main:app --reload
 ```
 
@@ -95,7 +109,21 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 | Rota | Descrição |
 |---|---|
 | `GET /` | Verifica se a API está no ar |
-| `GET /veiculos/{veiculo_id}` | Rota inicial de veículos (o identificador é validado como número inteiro) |
+| `GET /veiculos/{veiculo_id}` | Busca um veículo no banco pelo identificador |
+
+Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
+
+| Requisição | Status | Resposta |
+|---|---|---|
+| `/veiculos/1` | 200 | `{"veiculo_id":1,"dados":{"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_modelo":2018,"km_atual":98000}}` |
+| `/veiculos/99999` | 404 | `{"detail":"Veículo não encontrado."}` |
+| `/veiculos/abc` | 422 | Erro de validação: o identificador precisa ser um número inteiro |
+
+Segurança da consulta:
+
+- **Parâmetro nomeado:** o SQL usa `:veiculo_id` e o valor é enviado separado do comando, o que impede SQL Injection.
+- **Colunas explícitas:** a consulta lista só as colunas exibidas, sem `SELECT *`. Dados internos (`id_usuario`) e pessoais (`placa`) não saem na resposta.
+- **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
 
 ## Protótipo em terminal
 
@@ -143,12 +171,14 @@ database/
  └── diagrama.png    diagrama do banco
 
 api/
- └── main.py         aplicação FastAPI e rotas
+ ├── main.py         aplicação FastAPI e rotas
+ └── database.py     conexão com o banco (lê DATABASE_URL do .env)
 
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 
 requirements.txt     dependências Python com as versões fixadas
+.env.example         modelo das variáveis de ambiente (copiar para .env)
 ```
 
 ## Roadmap
