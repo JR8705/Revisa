@@ -1,7 +1,5 @@
 from decimal import Decimal, InvalidOperation
 
-itens = []
-
 def calcular_orcamento(itens):
 
     orcamento_total = Decimal('0.00')
@@ -75,29 +73,32 @@ def ler_tipo(mensagem):
 
 print('--- CADASTRO DE ITENS DO ORÇAMENTO ---')
 
-while True:
+def cadastrar_itens():
+    itens = []
+    while True:
     
-    descricao =  input('\nDigite a descrição do item: ')
-    tipo = ler_tipo('\nDigite o tipo do item (1. Mão de obra / 2. Peça): ')
-    quantidade = ler_decimal('Digite a quantidade do item: ')
-    valor_unitario = ler_decimal('Digite o valor do item: R$')
+        descricao =  input('\nDigite a descrição do item: ')
+        tipo = ler_tipo('\nDigite o tipo do item (1. Mão de obra / 2. Peça): ')
+        quantidade = ler_decimal('Digite a quantidade do item: ')
+        valor_unitario = ler_decimal('Digite o valor do item: R$')
 
 
-    novo_item = {
-        'descricao': descricao,
-        'tipo': tipo,
-        'quantidade': quantidade,
-        'valor': valor_unitario
-    }
+        novo_item = {
+            'descricao': descricao,
+            'tipo': tipo,
+            'quantidade': quantidade,
+            'valor': valor_unitario
+        }
 
-    itens.append(novo_item)
+        itens.append(novo_item)
 
-    continuar = input('Deseja adicionar mais um item? (s/n): ').strip().lower()
-    if continuar == 'n':
-        break
+        continuar = input('Deseja adicionar mais um item? (s/n): ').strip().lower()
+        if continuar == 'n':
+            break
+    return itens
 
+itens = cadastrar_itens()
 limite_mao_obra = ler_decimal("Porcentagem para o alerta: ")
-
 orcamento_total,valor_mao,valor_peca = calcular_orcamento(itens)
 perc_mao, perc_peca = calcular_perc(valor_mao, valor_peca, orcamento_total)
 
