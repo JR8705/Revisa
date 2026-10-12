@@ -110,6 +110,7 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 |---|---|
 | `GET /` | Verifica se a API está no ar |
 | `GET /veiculos/{veiculo_id}` | Busca um veículo no banco pelo identificador |
+| `GET /veiculos/placa/{veiculo_placa}` | Busca veículos pela placa (aceita minúsculas e espaços nas pontas) |
 
 Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
 
@@ -119,11 +120,33 @@ Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
 | `/veiculos/99999` | 404 | `{"detail":"Veículo não encontrado."}` |
 | `/veiculos/abc` | 422 | Erro de validação: o identificador precisa ser um número inteiro |
 
-Segurança da consulta:
+Respostas de `GET /veiculos/placa/{veiculo_placa}`:
+
+| Requisição | Status | Resposta |
+|---|---|---|
+| `/veiculos/placa/QWE1A23` | 200 | `[{"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_modelo":2018,"km_atual":98000}]` |
+| `/veiculos/placa/qwe1a23` | 200 | Mesmo resultado: a placa é normalizada com `strip().upper()` antes da consulta |
+| `/veiculos/placa/AAA0000` | 404 | `{"detail":"Veículo não encontrado."}` |
+
+Como a placa não é única no banco, a rota devolve uma lista.
+
+Segurança das consultas:
 
 - **Parâmetro nomeado:** o SQL usa `:veiculo_id` e o valor é enviado separado do comando, o que impede SQL Injection.
 - **Colunas explícitas:** a consulta lista só as colunas exibidas, sem `SELECT *`. Dados internos (`id_usuario`) e pessoais (`placa`) não saem na resposta.
 - **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
+
+### Laboratório de SQL Injection
+
+A rota por placa recebe texto livre, por isso foi usada para estudar SQL Injection. Primeiro foi escrita, apenas localmente e sem commit, uma versão vulnerável que montava o SQL colando a placa no texto da consulta (f-string). Depois ela foi corrigida com parâmetro nomeado, que é a versão do repositório.
+
+| Placa enviada | Versão vulnerável (f-string) | Versão segura (`:placa`) |
+|---|---|---|
+| `QWE1A23` | 200, só o Gol | 200, só o Gol |
+| `' OR '1'='1` | 200, **todos os 6 veículos** | 404 |
+| `'` | 500, erro de sintaxe do PostgreSQL | 404 |
+
+Na versão vulnerável, a aspa enviada fecha a aspa do código e o banco recebe `WHERE placa = '' OR '1'='1'`, condição verdadeira para todas as linhas. Com o parâmetro nomeado, o valor é enviado separado do comando e tratado só como dado: o ataque vira a busca por uma placa que não existe. A normalização com `strip().upper()` é só usabilidade; quem protege é o parâmetro.
 
 ## Protótipo em terminal
 
