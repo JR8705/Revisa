@@ -116,7 +116,7 @@ Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
 
 | Requisição | Status | Resposta |
 |---|---|---|
-| `/veiculos/1` | 200 | `{"veiculo_id":1,"dados":{"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_modelo":2018,"km_atual":98000}}` |
+| `/veiculos/1` | 200 | `{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}` |
 | `/veiculos/99999` | 404 | `{"detail":"Veículo não encontrado."}` |
 | `/veiculos/abc` | 422 | Erro de validação: o identificador precisa ser um número inteiro |
 
@@ -124,21 +124,38 @@ Respostas de `GET /veiculos/placa/{veiculo_placa}`:
 
 | Requisição | Status | Resposta |
 |---|---|---|
-| `/veiculos/placa/QWE1A23` | 200 | `[{"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_modelo":2018,"km_atual":98000}]` |
+| `/veiculos/placa/QWE1A23` | 200 | `[{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}]` |
 | `/veiculos/placa/qwe1a23` | 200 | Mesmo resultado: a placa é normalizada com `strip().upper()` antes da consulta |
 | `/veiculos/placa/AAA0000` | 404 | `{"detail":"Veículo não encontrado."}` |
 
 Como a placa não é única no banco, a rota devolve uma lista.
 
+### Como a API acessa o banco
+
+As rotas não escrevem SQL à mão. Cada peça tem um papel:
+
+| Arquivo | Papel |
+|---|---|
+| `api/database.py` | Cria a conexão (`engine`) a partir da `DATABASE_URL` |
+| `api/models.py` | Model `Veiculo` (SQLAlchemy): a tabela `veiculos` inteira descrita em Python, inclusive colunas internas e pessoais |
+| `api/schemas.py` | Schema `VeiculoResposta` (Pydantic): o formato da resposta, com só os campos que podem sair |
+| `api/main.py` | Rotas: consultam com o model e respondem com o schema (`response_model`) |
+
+```
+banco → model Veiculo → rota → schema VeiculoResposta → JSON
+```
+
+O model tem `placa` e `id_usuario` porque representa a tabela; o schema não tem, então esses campos são descartados antes da resposta, mesmo que a consulta os traga. O schema também aparece documentado em `/docs`.
+
 Segurança das consultas:
 
-- **Parâmetro nomeado:** o SQL usa `:veiculo_id` e o valor é enviado separado do comando, o que impede SQL Injection.
-- **Colunas explícitas:** a consulta lista só as colunas exibidas, sem `SELECT *`. Dados internos (`id_usuario`) e pessoais (`placa`) não saem na resposta.
+- **Parâmetros automáticos:** as consultas são montadas com `select(Veiculo).where(...)`, e o SQLAlchemy envia os valores como parâmetros, separados do comando, o que impede SQL Injection.
+- **Lista branca na resposta:** o `response_model` só deixa sair os campos do schema. Dados internos (`id_usuario`) e pessoais (`placa`) nunca chegam ao cliente.
 - **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
 
 ### Laboratório de SQL Injection
 
-A rota por placa recebe texto livre, por isso foi usada para estudar SQL Injection. Primeiro foi escrita, apenas localmente e sem commit, uma versão vulnerável que montava o SQL colando a placa no texto da consulta (f-string). Depois ela foi corrigida com parâmetro nomeado, que é a versão do repositório.
+A rota por placa recebe texto livre, por isso foi usada para estudar SQL Injection. Primeiro foi escrita, apenas localmente e sem commit, uma versão vulnerável que montava o SQL colando a placa no texto da consulta (f-string). Depois ela foi corrigida com parâmetro nomeado; hoje a consulta usa o model, que gera o parâmetro automaticamente (`WHERE veiculos.placa = :placa_1`).
 
 | Placa enviada | Versão vulnerável (f-string) | Versão segura (`:placa`) |
 |---|---|---|
@@ -195,7 +212,9 @@ database/
 
 api/
  ├── main.py         aplicação FastAPI e rotas
- └── database.py     conexão com o banco (lê DATABASE_URL do .env)
+ ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
+ ├── models.py       model Veiculo (SQLAlchemy), espelho da tabela
+ └── schemas.py      schema VeiculoResposta (Pydantic), formato da resposta
 
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
