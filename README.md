@@ -102,8 +102,23 @@ Para testar a conexão e subir o servidor:
 
 ```bash
 python api/database.py          # deve imprimir: Conexão bem-sucedida! O banco respondeu: 1
+alembic stamp head              # só na primeira vez: registra a versão do banco (ver abaixo)
 uvicorn api.main:app --reload
 ```
+
+### Migrações do banco (Alembic)
+
+As mudanças na estrutura do banco passam a ser feitas por migrações do Alembic, guardadas em `alembic/versions/` e aplicadas em ordem. O banco é criado pelo `schema.sql` e pelo `seed.sql`; a primeira migração (`162a0455a943`, "base: banco existente") está vazia e representa esse ponto de partida. Por isso, em um banco recém-criado, o comando é `alembic stamp head`, que apenas registra a versão na tabela `alembic_version`, sem executar nada:
+
+```bash
+alembic stamp head              # banco criado pelo schema.sql: registra a versão base
+alembic current                 # mostra a versão atual: 162a0455a943 (head)
+alembic upgrade head            # aplica as migrações futuras, quando existirem
+```
+
+O `alembic/env.py` lê a conexão da mesma `DATABASE_URL` do `.env` usada pela API, então o `alembic.ini` continua só com o endereço de exemplo e nenhuma senha vai para o repositório.
+
+**Atenção:** o model ainda descreve apenas a tabela `veiculos`. Por isso o `alembic revision --autogenerate` hoje propõe apagar as outras oito tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
 
 Com o servidor rodando, a documentação interativa da API fica em `http://127.0.0.1:8000/docs`.
 
@@ -231,11 +246,16 @@ api/
  ├── models.py       model Veiculo (SQLAlchemy), espelho da tabela
  └── schemas.py      schema VeiculoResposta (Pydantic), formato da resposta
 
+alembic/
+ ├── env.py          configuração: lê a DATABASE_URL e o model
+ └── versions/       migrações, em ordem
+
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 
 requirements.txt     dependências Python com as versões fixadas
 .env.example         modelo das variáveis de ambiente (copiar para .env)
+alembic.ini          configuração do Alembic (sem senha)
 ```
 
 ## Roadmap
