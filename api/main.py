@@ -1,9 +1,10 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from api.database import engine
 from api.schemas import VeiculoResposta
 from api.models import Veiculo
+
 
 app = FastAPI()
 
@@ -26,7 +27,7 @@ def get_veiculo_id(veiculo_id: int):
             raise HTTPException(status_code=404, detail='Veículo não encontrado.')
 
 @app.get('/veiculos/placa/{veiculo_placa}', response_model = list[VeiculoResposta])
-def get_veiculo_placa(veiculo_placa: str):
+def get_veiculo_placa(veiculo_placa: str = Path(max_length = 10)):
 
     placa_tratada = veiculo_placa.strip().upper()
     
