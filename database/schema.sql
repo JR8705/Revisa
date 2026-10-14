@@ -104,7 +104,7 @@ CREATE TABLE "veiculos" (
   "turbo" boolean NOT NULL DEFAULT false,
   "placa" varchar(10),
   "ano_fabricacao" smallint NOT NULL,
-  "ano_modelo" smallint,
+  "ano_modelo" smallint NOT NULL,
   "km_atual" integer NOT NULL DEFAULT 0 CHECK ("km_atual" >= 0),
   "criado_em" timestamptz NOT NULL DEFAULT (now()),
 

@@ -12,5 +12,5 @@ class VeiculoResposta(BaseModel):
     cilindrada: Decimal | None
     turbo: bool
     ano_fabricacao: int
-    ano_modelo: int | None
+    ano_modelo: int
     km_atual: int

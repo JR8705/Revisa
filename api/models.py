@@ -20,6 +20,6 @@ class Veiculo(Base):
     turbo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     placa: Mapped[str | None] = mapped_column(String(10))
     ano_fabricacao: Mapped[int] = mapped_column(SmallInteger)
-    ano_modelo: Mapped[int | None] = mapped_column(SmallInteger)
+    ano_modelo: Mapped[int] = mapped_column(SmallInteger)
     km_atual: Mapped[int] = mapped_column(Integer)
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone = True), server_default = func.now())

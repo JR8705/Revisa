@@ -110,7 +110,7 @@ Table veiculos {
   turbo boolean [not null, default: false]
   placa varchar(10)
   ano_fabricacao smallint [not null]
-  ano_modelo smallint
+  ano_modelo smallint [not null]
   km_atual integer [not null, default: 0, check: `km_atual >= 0`]
   criado_em timestamptz [not null, default: `now()`]
 
