@@ -1,4 +1,4 @@
-// Sistema Automotivo — Modelo de dados v7
+// Revisa — Modelo de dados v8 (motorização separada em combustível, cilindrada e turbo)
 // Padrão: snake_case, tabelas no plural, FK à esquerda nas Refs, enums sem acento
 
 Enum status_orcamento {
@@ -57,6 +57,15 @@ Enum status_manutencao {
   CONCLUIDA
 }
 
+Enum tipo_combustivel {
+  FLEX
+  GASOLINA
+  ETANOL
+  DIESEL
+  ELETRICO
+  HIBRIDO
+}
+
 Table precos_referencia {
   id integer [pk, increment]
   id_categoria integer [not null, ref: > categorias_item.id]
@@ -71,10 +80,15 @@ Table precos_referencia {
   indexes {
     id_categoria
     codigo_peca
-    (id_categoria, codigo_peca, fonte) [unique]
+    (id_categoria, `COALESCE(codigo_peca, '')`, fonte) [unique, name: 'ux_precos_ref_categoria_codigo_fonte']
   }
 
-  Note: 'valor_min <= valor_max (CHECK na migração). Unique exige NULLS NOT DISTINCT no PG15+'
+  checks {
+    `valor_min >= 0 AND valor_min <= valor_max` [name: 'ck_precos_ref_faixa']
+    `amostras >= 1` [name: 'ck_precos_ref_amostras']
+  }
+
+  Note: 'Faixa de preço esperada por categoria. Uma faixa por categoria + código de peça + fonte'
 }
 
 Table usuarios {
@@ -90,15 +104,22 @@ Table veiculos {
   id_usuario integer [not null, ref: > usuarios.id]
   marca varchar(50) [not null]
   modelo varchar(80) [not null]
-  motor varchar(30)
+  motor varchar(30) [note: 'Descrição livre complementar (ex.: MPI, TSI)']
+  combustivel tipo_combustivel [not null]
+  cilindrada numeric(3,1) [check: `cilindrada > 0`, note: 'Nula para elétricos']
+  turbo boolean [not null, default: false]
   placa varchar(10)
   ano_fabricacao smallint [not null]
   ano_modelo smallint
-  km_atual integer [not null, default: 0]
+  km_atual integer [not null, default: 0, check: `km_atual >= 0`]
   criado_em timestamptz [not null, default: `now()`]
 
   indexes {
     id_usuario
+  }
+
+  checks {
+    `combustivel <> 'ELETRICO' OR cilindrada IS NULL` [name: 'ck_veiculos_combustivel_cilindrada']
   }
 }
 
@@ -115,7 +136,7 @@ Table orcamentos {
   id_veiculo integer [not null, ref: > veiculos.id]
   id_oficina integer [not null, ref: > oficinas.id]
   data_emissao date [not null]
-  km integer [not null]
+  km integer [not null, check: `km >= 0`]
   status status_orcamento [not null, default: 'PENDENTE']
   arquivo_url varchar(255) [note: 'Foto/PDF enviado (nulo se lançado manualmente)']
   texto_extraido text [note: 'Retorno da IA, guardado para não pagar a extração duas vezes']
@@ -144,8 +165,8 @@ Table itens_orcamento {
   id_categoria integer [not null, ref: > categorias_item.id]
   descricao varchar(255) [not null, note: 'Texto original escrito pela oficina']
   tipo tipo_item [not null]
-  quantidade numeric(10,2) [not null, default: 1]
-  valor_unitario numeric(10,2) [not null]
+  quantidade numeric(10,2) [not null, default: 1, check: `quantidade > 0`]
+  valor_unitario numeric(10,2) [not null, check: `valor_unitario >= 0`]
 
   indexes {
     id_orcamento
