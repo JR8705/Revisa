@@ -1,5 +1,6 @@
 from pydantic import BaseModel, ConfigDict
-
+from api.enums import TipoCombustivelEnum
+from decimal import Decimal
 class VeiculoResposta(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -7,6 +8,9 @@ class VeiculoResposta(BaseModel):
     marca: str
     modelo: str
     motor: str | None
+    combustivel: TipoCombustivelEnum
+    cilindrada: Decimal | None
+    turbo: bool
     ano_fabricacao: int
     ano_modelo: int | None
     km_atual: int
