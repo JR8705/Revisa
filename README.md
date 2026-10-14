@@ -50,7 +50,8 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 - **Uma manutenção por orçamento:** a chave estrangeira `manutencoes.id_orcamento` é única.
 - **Quilometragem no orçamento e na manutenção:** registra o km no momento do serviço, base dos alertas de troca recente.
 - **Preço de referência em faixa:** `precos_referencia` guarda mínimo e máximo, com a origem do dado (manual, histórico ou externo).
-- **Regras no banco:** restrições `CHECK` impedem quilometragem negativa, quantidade zerada e faixa de preço invertida.
+- **Motorização padronizada:** em vez de um texto livre como "1.0 Turbo" (que poderia ser escrito "1.0T" ou "1.0 TSI"), o veículo tem `combustivel` (tipo `tipo_combustivel`: FLEX, GASOLINA, ETANOL, DIESEL, ELETRICO, HIBRIDO), `cilindrada` e `turbo`, que permitem comparar veículos e preços. O campo `motor` virou uma descrição complementar opcional. Só o combustível é obrigatório, porque nem todo dono sabe a cilindrada; `turbo` assume `false` quando não informado.
+- **Regras no banco:** restrições `CHECK` impedem quilometragem negativa, quantidade zerada, faixa de preço invertida, cilindrada zero ou negativa e cilindrada em veículo elétrico (a regra `ck_veiculos_combustivel_cilindrada`; o híbrido tem cilindrada).
 
 ## Tecnologias
 
@@ -110,13 +111,14 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 |---|---|
 | `GET /` | Verifica se a API está no ar |
 | `GET /veiculos/{veiculo_id}` | Busca um veículo no banco pelo identificador |
-| `GET /veiculos/placa/{veiculo_placa}` | Busca veículos pela placa (aceita minúsculas e espaços nas pontas) |
+| `GET /veiculos/placa/{veiculo_placa}` | Busca veículos pela placa (até 10 caracteres; aceita minúsculas e espaços nas pontas) |
 
 Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
 
 | Requisição | Status | Resposta |
 |---|---|---|
-| `/veiculos/1` | 200 | `{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}` |
+| `/veiculos/1` | 200 | `{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"MPI","combustivel":"FLEX","cilindrada":"1.0","turbo":false,"ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}` |
+| `/veiculos/7` | 200 | `{"id":7,"marca":"BYD","modelo":"Dolphin","motor":null,"combustivel":"ELETRICO","cilindrada":null,"turbo":false,"ano_fabricacao":2024,"ano_modelo":2024,"km_atual":15000}` |
 | `/veiculos/99999` | 404 | `{"detail":"Veículo não encontrado."}` |
 | `/veiculos/abc` | 422 | Erro de validação: o identificador precisa ser um número inteiro |
 
@@ -124,11 +126,17 @@ Respostas de `GET /veiculos/placa/{veiculo_placa}`:
 
 | Requisição | Status | Resposta |
 |---|---|---|
-| `/veiculos/placa/QWE1A23` | 200 | `[{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"1.0 MPI","ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}]` |
+| `/veiculos/placa/QWE1A23` | 200 | `[{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"MPI","combustivel":"FLEX","cilindrada":"1.0","turbo":false,"ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}]` |
 | `/veiculos/placa/qwe1a23` | 200 | Mesmo resultado: a placa é normalizada com `strip().upper()` antes da consulta |
 | `/veiculos/placa/AAA0000` | 404 | `{"detail":"Veículo não encontrado."}` |
+| `/veiculos/placa/AAAAAAAAAAA` | 422 | Erro de validação `string_too_long`: a placa tem no máximo 10 caracteres, igual ao `varchar(10)` do banco |
 
 Como a placa não é única no banco, a rota devolve uma lista.
+
+Sobre os campos da resposta:
+
+- `combustivel` só assume um dos seis valores do enum, que aparecem documentados em `/docs`.
+- `cilindrada` vem como texto (`"1.0"`), e não como número. Ela é um `Decimal`, e o JSON transformaria um número em ponto flutuante no cliente, com risco de perder precisão; como texto, o valor chega exato. É `null` em veículos elétricos.
 
 ### Como a API acessa o banco
 
@@ -137,6 +145,7 @@ As rotas não escrevem SQL à mão. Cada peça tem um papel:
 | Arquivo | Papel |
 |---|---|
 | `api/database.py` | Cria a conexão (`engine`) a partir da `DATABASE_URL` |
+| `api/enums.py` | `TipoCombustivelEnum`: os combustíveis aceitos, compartilhados pelo model e pelo schema |
 | `api/models.py` | Model `Veiculo` (SQLAlchemy): a tabela `veiculos` inteira descrita em Python, inclusive colunas internas e pessoais |
 | `api/schemas.py` | Schema `VeiculoResposta` (Pydantic): o formato da resposta, com só os campos que podem sair |
 | `api/main.py` | Rotas: consultam com o model e respondem com o schema (`response_model`) |
@@ -149,9 +158,12 @@ O model tem `placa` e `id_usuario` porque representa a tabela; o schema não tem
 
 Segurança das consultas:
 
+- **Validação de entrada:** a placa é limitada a 10 caracteres com `Path(max_length=10)`. Uma entrada maior recebe 422 antes de qualquer acesso ao banco.
 - **Parâmetros automáticos:** as consultas são montadas com `select(Veiculo).where(...)`, e o SQLAlchemy envia os valores como parâmetros, separados do comando, o que impede SQL Injection.
 - **Lista branca na resposta:** o `response_model` só deixa sair os campos do schema. Dados internos (`id_usuario`) e pessoais (`placa`) nunca chegam ao cliente.
 - **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
+
+As camadas são complementares (defesa em profundidade): o limite de tamanho barra entradas absurdas, mas não é a proteção contra SQL Injection. Um ataque curto como `'OR 1=1--` cabe em 10 caracteres e chega ao banco, onde o parâmetro o transforma em uma busca inofensiva (404).
 
 ### Laboratório de SQL Injection
 
@@ -160,10 +172,12 @@ A rota por placa recebe texto livre, por isso foi usada para estudar SQL Injecti
 | Placa enviada | Versão vulnerável (f-string) | Versão segura (`:placa`) |
 |---|---|---|
 | `QWE1A23` | 200, só o Gol | 200, só o Gol |
-| `' OR '1'='1` | 200, **todos os 6 veículos** | 404 |
+| `' OR '1'='1` | 200, **todos os veículos do banco** | 404 |
 | `'` | 500, erro de sintaxe do PostgreSQL | 404 |
 
 Na versão vulnerável, a aspa enviada fecha a aspa do código e o banco recebe `WHERE placa = '' OR '1'='1'`, condição verdadeira para todas as linhas. Com o parâmetro nomeado, o valor é enviado separado do comando e tratado só como dado: o ataque vira a busca por uma placa que não existe. A normalização com `strip().upper()` é só usabilidade; quem protege é o parâmetro.
+
+Com o limite de 10 caracteres adicionado depois, `' OR '1'='1` (11 caracteres) passou a receber 422 antes de chegar ao banco. Os testes com ataques curtos, como `'OR 1=1--`, continuam mostrando a proteção do parâmetro.
 
 ## Protótipo em terminal
 
@@ -213,6 +227,7 @@ database/
 api/
  ├── main.py         aplicação FastAPI e rotas
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
+ ├── enums.py        TipoCombustivelEnum (combustíveis aceitos)
  ├── models.py       model Veiculo (SQLAlchemy), espelho da tabela
  └── schemas.py      schema VeiculoResposta (Pydantic), formato da resposta
 
