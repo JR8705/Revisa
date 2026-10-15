@@ -108,13 +108,20 @@ uvicorn api.main:app --reload
 
 ### Migrações do banco (Alembic)
 
-As mudanças na estrutura do banco passam a ser feitas por migrações do Alembic, guardadas em `alembic/versions/` e aplicadas em ordem. O banco é criado pelo `schema.sql` e pelo `seed.sql`; a primeira migração (`162a0455a943`, "base: banco existente") está vazia e representa esse ponto de partida. Por isso, em um banco recém-criado, o comando é `alembic stamp head`, que apenas registra a versão na tabela `alembic_version`, sem executar nada:
+As mudanças na estrutura do banco passam a ser feitas por migrações do Alembic, guardadas em `alembic/versions/` e aplicadas em ordem. O banco é criado pelo `schema.sql` e pelo `seed.sql`; a primeira migração (`162a0455a943`, "base: banco existente") está vazia e representa esse ponto de partida. Em um banco recém-criado pelo `schema.sql`, que já está na estrutura final, o comando é `alembic stamp head`, que apenas registra a versão na tabela `alembic_version`, sem executar nada:
 
 ```bash
-alembic stamp head              # banco criado pelo schema.sql: registra a versão base
-alembic current                 # mostra a versão atual: 162a0455a943 (head)
-alembic upgrade head            # aplica as migrações futuras, quando existirem
+alembic stamp head              # banco criado pelo schema.sql: registra a versão atual
+alembic current                 # mostra a versão atual: 33cb4c40f5a3 (head)
+alembic upgrade head            # banco existente: aplica as migrações que faltam
 ```
+
+| Migração | O que faz |
+|---|---|
+| `162a0455a943` | Base: representa o banco criado pelo `schema.sql`, sem executar nada |
+| `33cb4c40f5a3` | Torna `veiculos.ano_modelo` obrigatório (`NOT NULL`); o `downgrade` volta a aceitar vazio |
+
+O `schema.sql` é mantido igual ao resultado das migrações: um banco criado do zero recebe `stamp head` e já fica na versão mais recente, enquanto um banco existente recebe `upgrade head`. Toda migração é testada antes em uma cópia do banco (`CREATE DATABASE bdrevisa_teste TEMPLATE bdrevisa_pd`), subindo, descendo e subindo de novo.
 
 O `alembic/env.py` lê a conexão da mesma `DATABASE_URL` do `.env` usada pela API, então o `alembic.ini` continua só com o endereço de exemplo e nenhuma senha vai para o repositório.
 
