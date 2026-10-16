@@ -1,8 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from api.enums import TipoCombustivelEnum
 from decimal import Decimal
 class VeiculoResposta(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes = True)
 
     id: int
     marca: str
@@ -14,3 +14,26 @@ class VeiculoResposta(BaseModel):
     ano_fabricacao: int
     ano_modelo: int
     km_atual: int
+
+class VeiculoCriar(BaseModel):
+    model_config = ConfigDict(extra = 'forbid')
+
+    marca: str = Field(min_length = 2, max_length = 50)
+    modelo: str = Field(min_length = 2,max_length = 80)
+    motor: str | None = Field(default = None, max_length = 30)
+    placa: str | None = Field(default = None, max_length = 10)
+    combustivel: TipoCombustivelEnum
+    cilindrada: Decimal | None = Field(default = None, gt = 0)
+    turbo: bool = Field(default = False)
+    ano_fabricacao: int = Field(ge = 1886, le = 2027)
+    ano_modelo: int = Field(ge = 1886, le = 2027)
+    km_atual: int = Field(default = 0, ge = 0)
+    
+    @model_validator(mode="after")
+    def verificar_anos(self) -> "VeiculoCriar":
+
+        if self.ano_modelo < self.ano_fabricacao or self.ano_modelo > self.ano_fabricacao + 1:
+            raise ValueError(
+                "O ano do modelo não pode ser menor que o ano de fabricação."
+            )
+        return self
