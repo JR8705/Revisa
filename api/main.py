@@ -102,3 +102,27 @@ def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar):
         
         session.refresh(veiculo_existente)
         return veiculo_existente
+
+
+@app.delete('/veiculos/{veiculo_id}', status_code = 204)
+def veiculo_delete(veiculo_id: int):
+
+    with Session(engine) as session:
+
+        veiculo = session.get(Veiculo, veiculo_id)
+
+        if not veiculo:
+            raise HTTPException(status_code = 404, detail = 'Veículo não encontrado.')
+
+        session.delete(veiculo)
+
+        try: 
+            session.commit()
+            return
+        
+        except IntegrityError as e:
+            session.rollback()
+            print(e) # TODO S6: usar logging
+            raise HTTPException(status_code = 409, detail = 'Veículo possui orçamentos vinculados. Não é possível apagar o veículo.')
+
+     
