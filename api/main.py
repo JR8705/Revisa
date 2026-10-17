@@ -3,9 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from api.database import engine
-from api.schemas import VeiculoResposta, VeiculoCriar
+from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar
 from api.models import Veiculo
-from api.database import engine
 
 ID_USUARIO_CONSTANTE = 1
 
@@ -53,12 +52,12 @@ def veiculo_criar(dados_veiculo: VeiculoCriar):
         if veiculo_tratado['placa'] is not None:
            veiculo_tratado['placa'] = veiculo_tratado['placa'].strip().upper()
 
-        novo_veiculo = Veiculo(
+        veiculo_novo = Veiculo(
             **veiculo_tratado,
             id_usuario = ID_USUARIO_CONSTANTE # TODO S2: vem do login
         ) 
 
-        session.add(novo_veiculo)
+        session.add(veiculo_novo)
         try: 
             session.commit()
 
@@ -67,5 +66,39 @@ def veiculo_criar(dados_veiculo: VeiculoCriar):
             print(e) # TODO S6: usar logging
             raise HTTPException(status_code = 422, detail = 'Dados recusados pelo banco.')
 
-        session.refresh(novo_veiculo)
-        return novo_veiculo
+        session.refresh(veiculo_novo)
+        return veiculo_novo
+
+
+@app.patch('/veiculos/{veiculo_id}', response_model = VeiculoResposta)
+def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar):
+
+    with Session(engine) as session:
+
+        veiculo_existente = session.get(Veiculo, veiculo_id)
+
+        if not veiculo_existente:
+            raise HTTPException(status_code = 404, detail = 'Veículo não encontrado.')
+
+        campos_enviados = dados_veiculo.model_dump(exclude_unset = True)
+
+        if 'placa' in campos_enviados and campos_enviados['placa'] is not None:
+            campos_enviados['placa'] = campos_enviados['placa'].strip().upper()
+
+        for campo, valor in campos_enviados.items():
+            setattr(veiculo_existente, campo, valor)
+
+        if veiculo_existente.ano_modelo < veiculo_existente.ano_fabricacao or veiculo_existente.ano_modelo > veiculo_existente.ano_fabricacao + 1:
+            session.rollback()
+            raise HTTPException(status_code = 422, detail = 'O ano do modelo deve ser igual ao de fabricação ou no máximo 1 ano maior')
+
+        try: 
+            session.commit()
+
+        except IntegrityError as e:
+            session.rollback()
+            print(e) # TODO S6: usar logging
+            raise HTTPException(status_code = 422, detail = 'Dados recusados pelo banco.')
+        
+        session.refresh(veiculo_existente)
+        return veiculo_existente
