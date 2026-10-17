@@ -1,6 +1,7 @@
 from fastapi import Depends, FastAPI, HTTPException, Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from api.database import engine
 from api.schemas import VeiculoResposta, VeiculoCriar
 from api.models import Veiculo
@@ -55,13 +56,16 @@ def veiculo_criar(dados_veiculo: VeiculoCriar):
         novo_veiculo = Veiculo(
             **veiculo_tratado,
             id_usuario = ID_USUARIO_CONSTANTE # TODO S2: vem do login
-        )
-            
+        ) 
 
-        session.add(novo_veiculo)  
-        session.commit()
+        session.add(novo_veiculo)
+        try: 
+            session.commit()
+
+        except IntegrityError as e:
+            session.rollback()
+            print(e) # TODO S6: usar logging
+            raise HTTPException(status_code = 422, detail = 'Dados recusados pelo banco.')
+
         session.refresh(novo_veiculo)
-        
         return novo_veiculo
-
-    
