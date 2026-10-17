@@ -46,3 +46,17 @@ class VeiculoCriar(BaseModel):
                 'Veículo elétrico não tem cilindrada.'
             )
         return self
+
+class VeiculoAtualizar(BaseModel):
+    model_config = ConfigDict(extra = 'forbid')
+    
+    marca: str = Field(default = None,min_length = 2, max_length = 50)
+    modelo: str = Field(default = None,min_length = 2,max_length = 80)
+    motor: str | None = Field(default = None, max_length = 30)
+    combustivel: TipoCombustivelEnum | None = Field(default = None)
+    cilindrada: Decimal = Field(default = None, gt = 0)
+    turbo: bool = Field(default = None)
+    placa: str | None = Field(default = None, max_length = 10)
+    ano_fabricacao: int = Field(default = None,ge = 1886, le = 2027)
+    ano_modelo: int = Field(default = None,ge = 1886, le = 2027)
+    km_atual: int = Field(default = None, ge = 0)
