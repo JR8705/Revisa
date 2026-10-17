@@ -22,12 +22,12 @@ class VeiculoCriar(BaseModel):
     modelo: str = Field(min_length = 2,max_length = 80)
     motor: str | None = Field(default = None, max_length = 30)
     combustivel: TipoCombustivelEnum
-    cilindrada: Decimal | None = Field(default = None, gt = 0)
+    cilindrada: Decimal | None = Field(default = None, gt = 0, max_digits = 3, decimal_places = 1, allow_inf_nan = False)
     turbo: bool = Field(default = False)
     placa: str | None = Field(default = None, max_length = 10)
     ano_fabricacao: int = Field(ge = 1886, le = 2027)
     ano_modelo: int = Field(ge = 1886, le = 2027)
-    km_atual: int = Field(default = 0, ge = 0)
+    km_atual: int = Field(default = 0, ge = 0, le = 6000000)
     
     @model_validator(mode = 'after')
     def verificar_anos(self) -> 'VeiculoCriar':
@@ -53,10 +53,10 @@ class VeiculoAtualizar(BaseModel):
     marca: str = Field(default = None,min_length = 2, max_length = 50)
     modelo: str = Field(default = None,min_length = 2,max_length = 80)
     motor: str | None = Field(default = None, max_length = 30)
-    combustivel: TipoCombustivelEnum | None = Field(default = None)
-    cilindrada: Decimal = Field(default = None, gt = 0)
+    combustivel: TipoCombustivelEnum = Field(default = None)
+    cilindrada: Decimal | None  = Field(default = None, gt = 0, max_digits = 3, decimal_places = 1, allow_inf_nan = False)
     turbo: bool = Field(default = None)
     placa: str | None = Field(default = None, max_length = 10)
     ano_fabricacao: int = Field(default = None,ge = 1886, le = 2027)
     ano_modelo: int = Field(default = None,ge = 1886, le = 2027)
-    km_atual: int = Field(default = None, ge = 0)
+    km_atual: int = Field(default = None, ge = 0, le = 6000000)
