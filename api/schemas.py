@@ -21,10 +21,10 @@ class VeiculoCriar(BaseModel):
     marca: str = Field(min_length = 2, max_length = 50)
     modelo: str = Field(min_length = 2,max_length = 80)
     motor: str | None = Field(default = None, max_length = 30)
-    placa: str | None = Field(default = None, max_length = 10)
     combustivel: TipoCombustivelEnum
     cilindrada: Decimal | None = Field(default = None, gt = 0)
     turbo: bool = Field(default = False)
+    placa: str | None = Field(default = None, max_length = 10)
     ano_fabricacao: int = Field(ge = 1886, le = 2027)
     ano_modelo: int = Field(ge = 1886, le = 2027)
     km_atual: int = Field(default = 0, ge = 0)
