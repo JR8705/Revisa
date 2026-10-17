@@ -29,11 +29,20 @@ class VeiculoCriar(BaseModel):
     ano_modelo: int = Field(ge = 1886, le = 2027)
     km_atual: int = Field(default = 0, ge = 0)
     
-    @model_validator(mode="after")
-    def verificar_anos(self) -> "VeiculoCriar":
+    @model_validator(mode = 'after')
+    def verificar_anos(self) -> 'VeiculoCriar':
 
         if self.ano_modelo < self.ano_fabricacao or self.ano_modelo > self.ano_fabricacao + 1:
             raise ValueError(
-                "O ano do modelo não pode ser menor que o ano de fabricação."
+                'O ano do modelo deve ser igual ao de fabricação ou no máximo 1 ano maior'
+            )
+        return self
+    
+    @model_validator(mode = 'after')
+    def verificar_cilindrada(self) -> 'VeiculoCriar':
+        
+        if self.combustivel == TipoCombustivelEnum.ELETRICO and self.cilindrada is not None:
+            raise ValueError(
+                'Veículo elétrico não tem cilindrada.'
             )
         return self
