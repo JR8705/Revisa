@@ -2,7 +2,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API está em construção e já consulta o banco.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem o CRUD de veículos (consultar, cadastrar, alterar e apagar). Ainda não há login: ver as limitações conhecidas.
 
 ## O problema
 
@@ -79,7 +79,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: a API já busca veículos no banco; as demais rotas ainda serão criadas.
+> Em construção: o CRUD de veículos está pronto; orçamentos, itens e login ainda serão criados.
 
 Pré-requisitos: Python 3.10 ou superior e o banco criado conforme a seção anterior.
 
@@ -134,6 +134,9 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 | `GET /` | Verifica se a API está no ar |
 | `GET /veiculos/{veiculo_id}` | Busca um veículo no banco pelo identificador |
 | `GET /veiculos/placa/{veiculo_placa}` | Busca veículos pela placa (até 10 caracteres; aceita minúsculas e espaços nas pontas) |
+| `POST /veiculos` | Cadastra um veículo (201). Corpo validado por `VeiculoCriar` |
+| `PATCH /veiculos/{veiculo_id}` | Altera só os campos enviados (200). Corpo validado por `VeiculoAtualizar` |
+| `DELETE /veiculos/{veiculo_id}` | Apaga um veículo (204); 409 se tiver orçamentos |
 
 Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
 
@@ -186,6 +189,89 @@ Segurança das consultas:
 - **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
 
 As camadas são complementares (defesa em profundidade): o limite de tamanho barra entradas absurdas, mas não é a proteção contra SQL Injection. Um ataque curto como `'OR 1=1--` cabe em 10 caracteres e chega ao banco, onde o parâmetro o transforma em uma busca inofensiva (404).
+
+### Cadastro, alteração e exclusão de veículos
+
+Com a escrita, o cliente passa a mandar dados para o banco. Por isso a entrada tem schemas próprios, separados do de resposta:
+
+| Schema | Uso | Regras |
+|---|---|---|
+| `VeiculoCriar` | corpo do `POST` | todos os campos obrigatórios do banco exigidos; `extra = 'forbid'` |
+| `VeiculoAtualizar` | corpo do `PATCH` | todos os campos opcionais (padrão `None`); `extra = 'forbid'` |
+| `VeiculoResposta` | resposta das rotas | lista branca: sem `placa`, `id_usuario` e `criado_em` |
+
+Exemplo de `POST /veiculos`:
+
+```json
+{"marca": "Fiat", "modelo": "Argo", "motor": "Firefly", "placa": " abc1d23 ",
+ "combustivel": "FLEX", "cilindrada": "1.3", "turbo": false,
+ "ano_fabricacao": 2021, "ano_modelo": 2022, "km_atual": 30000}
+```
+
+Resposta (201), com `id` gerado pelo banco e sem `placa`:
+
+```json
+{"id": 9, "marca": "Fiat", "modelo": "Argo", "motor": "Firefly", "combustivel": "FLEX", "cilindrada": "1.3", "turbo": false, "ano_fabricacao": 2021, "ano_modelo": 2022, "km_atual": 30000}
+```
+
+Respostas observadas:
+
+| Requisição | Status | Resultado |
+|---|---|---|
+| `POST` válido | 201 | veículo criado; placa gravada como `ABC1D23` (`strip().upper()`) |
+| `POST` com `id`, `id_usuario` ou `criado_em` | 422 | `extra_forbidden` (mass assignment barrado) |
+| `POST` com `km_atual: -1` | 422 | `greater_than_equal` |
+| `POST` elétrico com cilindrada | 422 | "Veículo elétrico não tem cilindrada." |
+| `POST` com `ano_fabricacao 2022` e `ano_modelo 2024` | 422 | o ano do modelo é igual ao de fabricação ou no máximo 1 a mais |
+| `PATCH {"km_atual": 105000}` | 200 | só o km muda |
+| `PATCH {}` | 200 | nada muda |
+| `PATCH {"marca": null}` | 422 | campo obrigatório no banco não aceita `null` |
+| `PATCH {"motor": null}` / `{"cilindrada": null}` | 200 | campos opcionais aceitam `null` |
+| `PATCH {"combustivel": "ELETRICO"}` em veículo com cilindrada | 422 | recusado pelo banco (`IntegrityError`), resposta genérica |
+| `PATCH {"ano_modelo": 2025}` em veículo de 2018 | 422 | regra dos anos checada sobre os valores finais; nada é gravado |
+| `PATCH` em id inexistente | 404 | `Veículo não encontrado.` |
+| `DELETE` de veículo sem orçamentos | 204 | apagado; o `GET` seguinte dá 404 |
+| `DELETE /veiculos/1` (tem orçamentos) | 409 | `Veículo possui orçamentos vinculados. Não é possível apagar o veículo.` |
+
+Decisões:
+
+- **Entrada separada da resposta:** o cliente não escolhe `id`, `id_usuario` nem `criado_em`. O `id_usuario` vem de uma constante do servidor (`ID_USUARIO_CONSTANTE = 1`).
+- **`forbid` na entrada:** campo desconhecido gera erro 422 em vez de ser ignorado em silêncio. O `forbid` só vale onde chega dado de fora; a resposta é montada pelo servidor.
+- **`PATCH` com `exclude_unset=True`:** aplica só o que o cliente enviou. O padrão `None` do schema nunca chega ao banco. Campos obrigatórios no banco recusam `null` enviado, mas podem ser omitidos.
+- **Regras entre campos:** a regra dos anos e a de elétrico sem cilindrada ficam em validadores do schema (`POST`). No `PATCH`, a regra dos anos é checada na rota, sobre os valores finais do veículo, porque o schema só enxerga o corpo. A regra do elétrico no `PATCH` fica a cargo do `CHECK` do banco.
+- **Limites espelham as colunas:** além dos mínimos, o schema impõe máximos (`km_atual` até 6.000.000; `cilindrada` com `max_digits=3`, `decimal_places=1`, sem infinito nem `NaN`; textos com o tamanho do `varchar`), para o erro do cliente virar 422 e não 500.
+- **Placa normalizada na gravação:** `strip().upper()`, igual à busca. Aceita `null`, e a placa não é única.
+- **Erros do banco:** `IntegrityError` no `commit` gera `rollback` e resposta genérica (422 no cadastro e na alteração, 409 na exclusão). O detalhe vai só para o terminal.
+- **Exclusão bloqueada com vínculos:** a chave estrangeira não tem `ON DELETE`, então o banco impede apagar veículo com orçamentos. Foi mantido assim de propósito para não destruir histórico.
+
+### Bateria de segurança do CRUD
+
+Rodada em banco novo (schema + seed), com a API no ar. Todos os casos passaram:
+
+| Ataque | Resultado |
+|---|---|
+| S1: `POST` com `id`, `id_usuario` ou `criado_em` | 422 `extra_forbidden` |
+| S2: `POST` com `marca = '; DROP TABLE veiculos;--` | 201, texto gravado igual ao enviado; `GET /veiculos/1` segue 200 |
+| S3: `PATCH` com placa `' OR '1'='1` (11 caracteres) | 422 `string_too_long` |
+| S3: `PATCH` com placa `'OR 1=1--` (9 caracteres) e busca por ela | 200; a busca devolve só o veículo alterado, nunca o veículo 1 |
+| S4: `marca` e `modelo` com 10.000 caracteres | 422 `string_too_long` |
+| S5: cilindrada `"inf"` e `"NaN"` | 422 `finite_number` |
+| S5: `turbo = "talvez"` | 422 `bool_parsing` |
+| S5: cilindrada `100` | 422 `decimal_whole_digits` |
+| S5: `km_atual = 99999999999` | 422 `less_than_equal` |
+| S6: respostas de `POST` e `PATCH` | sem `placa`, `id_usuario` e `criado_em` |
+
+O S2 repete pela escrita o laboratório de SQL Injection: o `INSERT` envia o valor como parâmetro, então o texto malicioso é só dado. A bateria também achou falhas reais antes das correções: cilindrada `100` e `km_atual` enorme davam 500, porque o schema validava só o mínimo. Hoje o schema valida os máximos.
+
+### Limitações conhecidas do CRUD
+
+| Limitação | Detalhe | Quando resolver |
+|---|---|---|
+| Sem login (IDOR) | qualquer pessoa altera ou apaga qualquer veículo sem orçamentos; `id_usuario` é fixo | S2 (login JWT) |
+| JSON com `Infinity` cru | corpo com a palavra `Infinity` (JSON inválido) devolve 500 em vez de 422: o erro estoura ao montar a própria resposta 422, que tenta devolver o valor recebido | investigar |
+| Regra dos anos duplicada | existe no schema `VeiculoCriar` e na rota `PATCH` | refatorar em uma função |
+| `print(e)` nos erros do banco | em produção deve ser log | S6 (`logging`) |
+| Mensagem do 409 | supõe que a causa é orçamento vinculado | revisar se outras tabelas apontarem para `veiculos` |
 
 ### Laboratório de SQL Injection
 
@@ -251,7 +337,7 @@ api/
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
  ├── enums.py        TipoCombustivelEnum (combustíveis aceitos)
  ├── models.py       model Veiculo (SQLAlchemy), espelho da tabela
- └── schemas.py      schema VeiculoResposta (Pydantic), formato da resposta
+ └── schemas.py      schemas Pydantic: VeiculoCriar, VeiculoAtualizar (entrada) e VeiculoResposta (saída)
 
 alembic/
  ├── env.py          configuração: lê a DATABASE_URL e o model
@@ -269,7 +355,8 @@ alembic.ini          configuração do Alembic (sem senha)
 
 - [x] Modelagem do banco de dados
 - [x] Protótipo em terminal do cálculo e dos alertas
-- [ ] API: autenticação e cadastro de veículos
+- [x] API: CRUD de veículos (consultar, cadastrar, alterar, apagar)
+- [ ] API: autenticação (login) e dono do veículo
 - [ ] Orçamentos, itens e histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
 - [ ] Motor de alertas
