@@ -3,9 +3,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from api.database import engine
-from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar
-from api.models import Veiculo
+from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, UsuarioResposta, UsuarioCriar
+from api.models import Veiculo, Usuario
 from api.regras import ano_valido, combustivel_valido
+from api.seguranca import gerar_hash, verificar_senha
 
 ID_USUARIO_CONSTANTE = 1
 
@@ -130,4 +131,26 @@ def veiculo_delete(veiculo_id: int):
             print(e) # TODO S6: usar logging
             raise HTTPException(status_code = 409, detail = 'Veículo possui orçamentos vinculados. Não é possível apagar o veículo.')
 
-     
+@app.post('/usuarios', response_model = UsuarioResposta, status_code = 201)
+def usuario_criar(dados_usuario: UsuarioCriar):
+
+    with Session(engine) as session:
+        usuario_tratado = dados_usuario.model_dump()
+
+        senha = usuario_tratado.pop('senha')
+        usuario_tratado['senha_hash'] = gerar_hash(senha)
+        usuario_tratado['email'] = usuario_tratado['email'].strip().lower()
+
+        usuario_novo = Usuario(**usuario_tratado)
+
+        session.add(usuario_novo)
+        try: 
+            session.commit()
+        
+        except IntegrityError as e:
+            session.rollback()
+             # print(e) TODO S6: usar logging
+            raise HTTPException(status_code = 409, detail = 'E-mail já cadastrado.')
+        
+        session.refresh(usuario_novo)
+        return usuario_novo

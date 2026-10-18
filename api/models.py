@@ -8,7 +8,7 @@ class Base(DeclarativeBase):
 class Veiculo(Base):
     __tablename__ = 'veiculos'
 
-    id: Mapped[int] =  mapped_column(primary_key=True)
+    id: Mapped[int] =  mapped_column(primary_key = True)
     id_usuario: Mapped[int]
     marca: Mapped[str] = mapped_column(String(50))
     modelo: Mapped[str] = mapped_column(String(80))
@@ -16,10 +16,19 @@ class Veiculo(Base):
     combustivel: Mapped[TipoCombustivelEnum] = mapped_column(
         Enum(TipoCombustivelEnum, name='tipo_combustivel')
     )
-    cilindrada: Mapped[Decimal | None] = mapped_column(Numeric(precision=3, scale=1))
-    turbo: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    cilindrada: Mapped[Decimal | None] = mapped_column(Numeric(precision = 3, scale = 1))
+    turbo: Mapped[bool] = mapped_column(Boolean, default = False, server_default = "false", nullable = False)
     placa: Mapped[str | None] = mapped_column(String(10))
     ano_fabricacao: Mapped[int] = mapped_column(SmallInteger)
     ano_modelo: Mapped[int] = mapped_column(SmallInteger)
     km_atual: Mapped[int] = mapped_column(Integer)
+    criado_em: Mapped[datetime] = mapped_column(DateTime(timezone = True), server_default = func.now())
+
+class Usuario(Base):
+    __tablename__ = 'usuarios'
+
+    id: Mapped[int] = mapped_column(primary_key = True)
+    nome: Mapped[str] = mapped_column(String(100))
+    email: Mapped[str] = mapped_column(String(150), unique = True)
+    senha_hash: Mapped[str] = mapped_column(String(255))
     criado_em: Mapped[datetime] = mapped_column(DateTime(timezone = True), server_default = func.now())

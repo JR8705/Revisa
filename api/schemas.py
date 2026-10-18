@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from api.enums import TipoCombustivelEnum
 from decimal import Decimal
 from api.regras import ano_valido, combustivel_valido
@@ -61,3 +61,18 @@ class VeiculoAtualizar(BaseModel):
     ano_fabricacao: int = Field(default = None,ge = 1886, le = 2027)
     ano_modelo: int = Field(default = None,ge = 1886, le = 2027)
     km_atual: int = Field(default = None, ge = 0, le = 6000000)
+
+class UsuarioResposta(BaseModel):
+    model_config = ConfigDict(from_attributes = True)
+
+    id: int
+    nome: str
+    email: str
+
+
+class UsuarioCriar(BaseModel):
+    model_config = ConfigDict(extra = 'forbid')
+
+    nome: str = Field(min_length = 2, max_length = 100)
+    email: EmailStr = Field(min_length = 6, max_length = 150)
+    senha: str = Field(min_length = 8, max_length = 128)
