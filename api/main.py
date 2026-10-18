@@ -147,9 +147,9 @@ def usuario_criar(dados_usuario: UsuarioCriar):
         try: 
             session.commit()
         
-        except IntegrityError as e:
+        except IntegrityError:
             session.rollback()
-             # print(e) TODO S6: usar logging
+            # print(e) TODO S6: usar logging
             raise HTTPException(status_code = 409, detail = 'E-mail já cadastrado.')
         
         session.refresh(usuario_novo)
