@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 from api.database import engine
 from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar
 from api.models import Veiculo
+from api.regras import ano_valido, combustivel_valido
 
 ID_USUARIO_CONSTANTE = 1
 
@@ -88,10 +89,14 @@ def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar):
         for campo, valor in campos_enviados.items():
             setattr(veiculo_existente, campo, valor)
 
-        if veiculo_existente.ano_modelo < veiculo_existente.ano_fabricacao or veiculo_existente.ano_modelo > veiculo_existente.ano_fabricacao + 1:
+        if not ano_valido(veiculo_existente.ano_fabricacao, veiculo_existente.ano_modelo):
             session.rollback()
             raise HTTPException(status_code = 422, detail = 'O ano do modelo deve ser igual ao de fabricação ou no máximo 1 ano maior')
 
+        if not combustivel_valido(veiculo_existente.combustivel, veiculo_existente.cilindrada):
+            session.rollback()
+            raise HTTPException(status_code = 422, detail = 'Veículo elétrico não tem cilindrada.')
+        
         try: 
             session.commit()
 

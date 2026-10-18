@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from api.enums import TipoCombustivelEnum
 from decimal import Decimal
+from api.regras import ano_valido, combustivel_valido
 class VeiculoResposta(BaseModel):
     model_config = ConfigDict(from_attributes = True)
 
@@ -32,7 +33,7 @@ class VeiculoCriar(BaseModel):
     @model_validator(mode = 'after')
     def verificar_anos(self) -> 'VeiculoCriar':
 
-        if self.ano_modelo < self.ano_fabricacao or self.ano_modelo > self.ano_fabricacao + 1:
+        if not ano_valido(self.ano_fabricacao, self.ano_modelo):
             raise ValueError(
                 'O ano do modelo deve ser igual ao de fabricação ou no máximo 1 ano maior'
             )
@@ -41,7 +42,7 @@ class VeiculoCriar(BaseModel):
     @model_validator(mode = 'after')
     def verificar_cilindrada(self) -> 'VeiculoCriar':
         
-        if self.combustivel == TipoCombustivelEnum.ELETRICO and self.cilindrada is not None:
+        if not combustivel_valido(self.combustivel, self.cilindrada):
             raise ValueError(
                 'Veículo elétrico não tem cilindrada.'
             )
