@@ -3,12 +3,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from api.database import engine
-from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, UsuarioResposta, UsuarioCriar
+from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
 from api.models import Veiculo, Usuario
 from api.regras import ano_valido, combustivel_valido
-from api.seguranca import gerar_hash, verificar_senha
+from api.seguranca import gerar_hash, verificar_senha, criar_token
 
 ID_USUARIO_CONSTANTE = 1
+HASH_FALSO = gerar_hash('qualquer-coisa') 
 
 app = FastAPI()
 
@@ -154,3 +155,23 @@ def usuario_criar(dados_usuario: UsuarioCriar):
         
         session.refresh(usuario_novo)
         return usuario_novo
+
+@app.post('/login', response_model = TokenResposta, status_code = 200)
+def usuario_login(dados_usuario: LoginEntrada):
+
+    email = dados_usuario.email.strip().lower()
+
+    with Session(engine) as session:
+        usuario = session.scalars(
+            select(Usuario).where(Usuario.email == email)
+        ).first()
+
+    hash_conferir = usuario.senha_hash if usuario else HASH_FALSO
+    senha_ok = verificar_senha(dados_usuario.senha, hash_conferir)
+
+    if not usuario or not senha_ok:
+        raise HTTPException(status_code = 401, detail = 'E-mail ou senha incorretos.', headers = {'WWW-Authenticate': 'Bearer'})
+
+    return {'access_token': criar_token(usuario.id), 'token_type': 'bearer'}
+
+    

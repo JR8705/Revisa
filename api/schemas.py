@@ -69,10 +69,20 @@ class UsuarioResposta(BaseModel):
     nome: str
     email: str
 
-
 class UsuarioCriar(BaseModel):
     model_config = ConfigDict(extra = 'forbid')
 
     nome: str = Field(min_length = 2, max_length = 100)
     email: EmailStr = Field(min_length = 6, max_length = 150)
     senha: str = Field(min_length = 8, max_length = 128)
+
+class LoginEntrada(BaseModel):
+    model_config = ConfigDict(extra = 'forbid')
+
+    email: EmailStr = Field(max_length = 150)
+    senha: str = Field(max_length = 128)
+
+class TokenResposta(BaseModel):
+
+    access_token: str
+    token_type: str = Field(default = 'bearer')
