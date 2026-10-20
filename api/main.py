@@ -1,4 +1,5 @@
 from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
@@ -6,12 +7,13 @@ from api.database import engine
 from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
 from api.models import Veiculo, Usuario
 from api.regras import ano_valido, combustivel_valido
-from api.seguranca import gerar_hash, verificar_senha, criar_token
+from api.seguranca import gerar_hash, verificar_senha, criar_token, ler_token
 
 ID_USUARIO_CONSTANTE = 1
 HASH_FALSO = gerar_hash('qualquer-coisa') 
 
 app = FastAPI()
+esquema_oauth = OAuth2PasswordBearer(tokenUrl='/login')
 
 @app.get('/')
 async def root():
@@ -174,4 +176,25 @@ def usuario_login(dados_usuario: LoginEntrada):
 
     return {'access_token': criar_token(usuario.id), 'token_type': 'bearer'}
 
+def usuario_atual(token: str = Depends(esquema_oauth)):
+    id_usuario = ler_token(token)
+
+    if id_usuario is None:
+        raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
+
+    try:
+        id_usuario = int(id_usuario)
+    except (ValueError, KeyError):
+        raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
     
+    with Session(engine) as session:
+        usuario = session.get(Usuario, id_usuario)
+        if usuario is None:
+            raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
+
+        return id_usuario
+    
+@app.get('/eu')
+def quem_sou_eu(id_usuario = Depends(usuario_atual)):
+    return {'id': id_usuario}
+
