@@ -2,7 +2,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem o CRUD de veículos (consultar, cadastrar, alterar e apagar). Ainda não há login: ver as limitações conhecidas.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT) e o CRUD de veículos, em que cada usuário só enxerga e altera os próprios veículos. Orçamentos, itens e alertas ainda serão criados.
 
 ## O problema
 
@@ -59,8 +59,9 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 |---|---|
 | Banco de dados | PostgreSQL |
 | Back-end | Python, FastAPI, SQLAlchemy, Alembic |
-| Testes | pytest |
-| Infraestrutura | Docker, GitHub Actions |
+| Segurança | argon2 (hash de senha), PyJWT (token), email-validator |
+| Testes | scripts de teste manuais; pytest planejado |
+| Infraestrutura | Docker, GitHub Actions (planejados) |
 
 ## Como rodar o banco
 
@@ -79,7 +80,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: o CRUD de veículos está pronto; orçamentos, itens e login ainda serão criados.
+> Em construção: cadastro, login e CRUD de veículos estão prontos; orçamentos e itens ainda serão criados.
 
 Pré-requisitos: Python 3.10 ou superior e o banco criado conforme a seção anterior.
 
@@ -90,13 +91,24 @@ source .venv/bin/activate       # Linux e macOS
 pip install -r requirements.txt
 ```
 
-A conexão com o banco é lida da variável de ambiente `DATABASE_URL`, nunca escrita no código. Copie o modelo e preencha com os dados do seu PostgreSQL:
+A conexão com o banco e o segredo do token são lidos de variáveis de ambiente, nunca escritos no código. Copie o modelo e preencha:
 
 ```bash
 cp .env.example .env            # Windows: copy .env.example .env
 ```
 
-O `.env` está no `.gitignore`, então a senha não vai para o repositório. Se a variável estiver faltando, a API para na inicialização com uma mensagem que cita apenas o nome da variável, sem expor o valor.
+| Variável | O que é |
+|---|---|
+| `DATABASE_URL` | Endereço do PostgreSQL, com usuário e senha |
+| `JWT_SECRET` | Segredo que assina os tokens. Mínimo de 32 caracteres |
+
+Para gerar um `JWT_SECRET` forte:
+
+```bash
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+O `.env` está no `.gitignore`, então senha e segredo não vão para o repositório. Se uma variável estiver faltando (ou o `JWT_SECRET` for curto demais), a API para na inicialização com uma mensagem que cita apenas o nome da variável, sem expor o valor.
 
 Para testar a conexão e subir o servidor:
 
@@ -105,6 +117,8 @@ python api/database.py          # deve imprimir: Conexão bem-sucedida! O banco 
 alembic stamp head              # só na primeira vez: registra a versão do banco (ver abaixo)
 uvicorn api.main:app --reload
 ```
+
+**Usuários do seed:** o `seed.sql` traz usuários de exemplo com um hash de senha **inválido de propósito** (o repositório não publica credenciais). Eles existem para ser donos dos veículos de exemplo, mas **não fazem login**. Para testar a API, cadastre um usuário novo em `POST /usuarios`.
 
 ### Migrações do banco (Alembic)
 
@@ -125,29 +139,117 @@ O `schema.sql` é mantido igual ao resultado das migrações: um banco criado do
 
 O `alembic/env.py` lê a conexão da mesma `DATABASE_URL` do `.env` usada pela API, então o `alembic.ini` continua só com o endereço de exemplo e nenhuma senha vai para o repositório.
 
-**Atenção:** o model ainda descreve apenas a tabela `veiculos`. Por isso o `alembic revision --autogenerate` hoje propõe apagar as outras oito tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
+**Atenção:** o model ainda descreve apenas as tabelas `veiculos` e `usuarios`. Por isso o `alembic revision --autogenerate` hoje propõe apagar as outras tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
 
 Com o servidor rodando, a documentação interativa da API fica em `http://127.0.0.1:8000/docs`.
 
-| Rota | Descrição |
-|---|---|
-| `GET /` | Verifica se a API está no ar |
-| `GET /veiculos/{veiculo_id}` | Busca um veículo no banco pelo identificador |
-| `GET /veiculos/placa/{veiculo_placa}` | Busca veículos pela placa (até 10 caracteres; aceita minúsculas e espaços nas pontas) |
-| `POST /veiculos` | Cadastra um veículo (201). Corpo validado por `VeiculoCriar` |
-| `PATCH /veiculos/{veiculo_id}` | Altera só os campos enviados (200). Corpo validado por `VeiculoAtualizar` |
-| `DELETE /veiculos/{veiculo_id}` | Apaga um veículo (204); 409 se tiver orçamentos |
+| Rota | Autenticação | Descrição |
+|---|---|---|
+| `GET /` | não | Verifica se a API está no ar |
+| `POST /usuarios` | não | Cadastra um usuário (201) |
+| `POST /login` | não | Troca e-mail e senha por um token (200) |
+| `GET /veiculos/{veiculo_id}` | **token** | Busca um veículo do usuário logado pelo identificador |
+| `GET /veiculos/placa/{veiculo_placa}` | **token** | Busca veículos do usuário logado pela placa (até 10 caracteres; aceita minúsculas e espaços nas pontas) |
+| `POST /veiculos` | **token** | Cadastra um veículo para o usuário logado (201) |
+| `PATCH /veiculos/{veiculo_id}` | **token** | Altera só os campos enviados (200) |
+| `DELETE /veiculos/{veiculo_id}` | **token** | Apaga um veículo (204); 409 se tiver orçamentos |
 
-Respostas de `GET /veiculos/{veiculo_id}` com os dados do `seed.sql`:
+O token vai no cabeçalho `Authorization: Bearer <token>`. No `/docs`, o botão **Authorize** faz isso.
+
+### Cadastro e login
+
+Fluxo: `POST /usuarios` cria a conta, `POST /login` devolve um token, e as rotas de veículos exigem esse token.
+
+Exemplo de `POST /usuarios`:
+
+```json
+{"nome": "Maria Souza", "email": "maria@email.com", "senha": "senhaSegura123"}
+```
+
+Resposta (201), sem a senha e sem o hash:
+
+```json
+{"id": 9, "nome": "Maria Souza", "email": "maria@email.com"}
+```
+
+Exemplo de `POST /login` e a resposta (200):
+
+```json
+{"email": "maria@email.com", "senha": "senhaSegura123"}
+```
+
+```json
+{"access_token": "<token JWT>", "token_type": "bearer"}
+```
+
+Respostas observadas:
+
+| Requisição | Status | Resultado |
+|---|---|---|
+| `POST /usuarios` válido | 201 | usuário criado; e-mail gravado em minúsculas e sem espaços nas pontas |
+| `POST /usuarios` com e-mail já cadastrado | 409 | `E-mail já cadastrado.` |
+| `POST /usuarios` com senha de 7 caracteres, e-mail inválido ou campo extra | 422 | erro de validação |
+| `POST /login` correto | 200 | token |
+| `POST /login` com e-mail em maiúsculas | 200 | o e-mail é normalizado igual ao cadastro |
+| `POST /login` com senha errada | 401 | `E-mail ou senha incorretos.` |
+| `POST /login` com e-mail inexistente | 401 | **a mesma** resposta, com o mesmo status e a mesma mensagem |
+| `POST /login` com senha de 129 caracteres ou campo extra | 422 | erro de validação |
+| Rota de veículo sem token | 401 | `Not authenticated` |
+| Rota de veículo com token inválido, adulterado ou expirado | 401 | `Token inválido.` |
+| Veículo de outro usuário (leitura, alteração ou exclusão) | 404 | `Veículo não encontrado.`, idêntico ao de um veículo que não existe |
+
+Decisões:
+
+- **Senha nunca é guardada:** o banco guarda só o hash **argon2id** (com salt, lento de propósito). A resposta nunca devolve a senha nem o hash. `argon2.verify` levanta exceção quando a senha não confere; ela é tratada e vira `False`.
+- **Mensagem única no login:** e-mail inexistente e senha errada devolvem o mesmo 401 com a mesma mensagem, para o atacante não descobrir quais e-mails existem.
+- **Tempo igual nos dois casos:** com e-mail inexistente, a API confere a senha contra um hash falso (argon2 de verdade, gerado uma vez na inicialização), então a resposta leva o mesmo tempo. Medido: 0,063 s com senha errada contra 0,060 s com e-mail inexistente.
+- **Cadastro revela e-mail repetido (409):** decisão de produto, porque o usuário precisa saber que já tem conta. O custo é que um atacante pode testar quais e-mails existem pelo cadastro; a mitigação (limite de tentativas) está nas limitações.
+- **POST para o login:** as credenciais vão no corpo, e não na URL, que fica registrada em logs.
+- **Token JWT (HS256, 30 minutos):** o `sub` é o id do usuário em texto, o `exp` é obrigatório e a leitura só aceita o algoritmo esperado (bloqueia o ataque `alg: none`). O segredo vem do `.env`.
+- **Dependência `usuario_atual`:** lê o token, valida, e **consulta o banco** para confirmar que o usuário ainda existe. Se o usuário foi apagado, o token deixa de valer na hora. Token ausente, adulterado, expirado, sem `exp`, com outro segredo, com `sub` que não é número ou de usuário apagado: todos devolvem o mesmo 401.
+- **Dono do veículo vem do token:** `id_usuario` não existe mais no corpo (enviá-lo dá 422). Toda consulta de veículo filtra pelo dono **dentro do `WHERE`**, então o veículo alheio simplesmente não existe para quem pergunta. O erro é 404 e não 403, para não confirmar que o veículo existe.
+
+### Como a API acessa o banco
+
+As rotas não escrevem SQL à mão. Cada peça tem um papel:
+
+| Arquivo | Papel |
+|---|---|
+| `api/database.py` | Cria a conexão (`engine`) a partir da `DATABASE_URL` |
+| `api/config.py` | Lê o `JWT_SECRET` do `.env` e valida o tamanho; define algoritmo e expiração do token |
+| `api/seguranca.py` | Hash e verificação de senha (argon2) e criação e leitura do token (JWT) |
+| `api/enums.py` | `TipoCombustivelEnum`: os combustíveis aceitos, compartilhados pelo model e pelo schema |
+| `api/regras.py` | Regras de negócio puras (`ano_valido`, `combustivel_valido`), usadas pelo schema e pela rota |
+| `api/models.py` | Models `Veiculo` e `Usuario` (SQLAlchemy): as tabelas descritas em Python, inclusive colunas internas e pessoais |
+| `api/schemas.py` | Schemas Pydantic: entrada (`VeiculoCriar`, `VeiculoAtualizar`, `UsuarioCriar`, `LoginEntrada`) e resposta (`VeiculoResposta`, `UsuarioResposta`, `TokenResposta`) |
+| `api/main.py` | Rotas e a dependência `usuario_atual` |
+
+```
+banco → model → rota → schema de resposta → JSON
+```
+
+O model tem `placa`, `id_usuario` e `senha_hash` porque representa a tabela; o schema de resposta não tem, então esses campos são descartados antes da resposta, mesmo que a consulta os traga.
+
+Segurança das consultas:
+
+- **Validação de entrada:** a placa é limitada a 10 caracteres com `Path(max_length=10)`. Uma entrada maior recebe 422 antes de qualquer acesso ao banco.
+- **Parâmetros automáticos:** as consultas são montadas com `select(...).where(...)`, e o SQLAlchemy envia os valores como parâmetros, separados do comando, o que impede SQL Injection.
+- **Lista branca na resposta:** o `response_model` só deixa sair os campos do schema. Dados internos (`id_usuario`, `senha_hash`) e pessoais (`placa`) nunca chegam ao cliente.
+- **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
+
+As camadas são complementares (defesa em profundidade): o limite de tamanho barra entradas absurdas, mas não é a proteção contra SQL Injection. Um ataque curto como `'OR 1=1--` cabe em 10 caracteres e chega ao banco, onde o parâmetro o transforma em uma busca inofensiva (404).
+
+Respostas de `GET /veiculos/{veiculo_id}` (com o token do dono do veículo e os dados do `seed.sql`):
 
 | Requisição | Status | Resposta |
 |---|---|---|
 | `/veiculos/1` | 200 | `{"id":1,"marca":"Volkswagen","modelo":"Gol","motor":"MPI","combustivel":"FLEX","cilindrada":"1.0","turbo":false,"ano_fabricacao":2018,"ano_modelo":2018,"km_atual":98000}` |
 | `/veiculos/7` | 200 | `{"id":7,"marca":"BYD","modelo":"Dolphin","motor":null,"combustivel":"ELETRICO","cilindrada":null,"turbo":false,"ano_fabricacao":2024,"ano_modelo":2024,"km_atual":15000}` |
 | `/veiculos/99999` | 404 | `{"detail":"Veículo não encontrado."}` |
+| `/veiculos/1` com o token de **outro** usuário | 404 | a mesma resposta acima |
 | `/veiculos/abc` | 422 | Erro de validação: o identificador precisa ser um número inteiro |
 
-Respostas de `GET /veiculos/placa/{veiculo_placa}`:
+Respostas de `GET /veiculos/placa/{veiculo_placa}` (com o token do dono):
 
 | Requisição | Status | Resposta |
 |---|---|---|
@@ -163,33 +265,6 @@ Sobre os campos da resposta:
 - `combustivel` só assume um dos seis valores do enum, que aparecem documentados em `/docs`.
 - `cilindrada` vem como texto (`"1.0"`), e não como número. Ela é um `Decimal`, e o JSON transformaria um número em ponto flutuante no cliente, com risco de perder precisão; como texto, o valor chega exato. É `null` em veículos elétricos.
 
-### Como a API acessa o banco
-
-As rotas não escrevem SQL à mão. Cada peça tem um papel:
-
-| Arquivo | Papel |
-|---|---|
-| `api/database.py` | Cria a conexão (`engine`) a partir da `DATABASE_URL` |
-| `api/enums.py` | `TipoCombustivelEnum`: os combustíveis aceitos, compartilhados pelo model e pelo schema |
-| `api/models.py` | Model `Veiculo` (SQLAlchemy): a tabela `veiculos` inteira descrita em Python, inclusive colunas internas e pessoais |
-| `api/schemas.py` | Schema `VeiculoResposta` (Pydantic): o formato da resposta, com só os campos que podem sair |
-| `api/main.py` | Rotas: consultam com o model e respondem com o schema (`response_model`) |
-
-```
-banco → model Veiculo → rota → schema VeiculoResposta → JSON
-```
-
-O model tem `placa` e `id_usuario` porque representa a tabela; o schema não tem, então esses campos são descartados antes da resposta, mesmo que a consulta os traga. O schema também aparece documentado em `/docs`.
-
-Segurança das consultas:
-
-- **Validação de entrada:** a placa é limitada a 10 caracteres com `Path(max_length=10)`. Uma entrada maior recebe 422 antes de qualquer acesso ao banco.
-- **Parâmetros automáticos:** as consultas são montadas com `select(Veiculo).where(...)`, e o SQLAlchemy envia os valores como parâmetros, separados do comando, o que impede SQL Injection.
-- **Lista branca na resposta:** o `response_model` só deixa sair os campos do schema. Dados internos (`id_usuario`) e pessoais (`placa`) nunca chegam ao cliente.
-- **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
-
-As camadas são complementares (defesa em profundidade): o limite de tamanho barra entradas absurdas, mas não é a proteção contra SQL Injection. Um ataque curto como `'OR 1=1--` cabe em 10 caracteres e chega ao banco, onde o parâmetro o transforma em uma busca inofensiva (404).
-
 ### Cadastro, alteração e exclusão de veículos
 
 Com a escrita, o cliente passa a mandar dados para o banco. Por isso a entrada tem schemas próprios, separados do de resposta:
@@ -200,7 +275,7 @@ Com a escrita, o cliente passa a mandar dados para o banco. Por isso a entrada t
 | `VeiculoAtualizar` | corpo do `PATCH` | todos os campos opcionais (padrão `None`); `extra = 'forbid'` |
 | `VeiculoResposta` | resposta das rotas | lista branca: sem `placa`, `id_usuario` e `criado_em` |
 
-Exemplo de `POST /veiculos`:
+Exemplo de `POST /veiculos` (com o cabeçalho `Authorization`):
 
 ```json
 {"marca": "Fiat", "modelo": "Argo", "motor": "Firefly", "placa": " abc1d23 ",
@@ -218,7 +293,8 @@ Respostas observadas:
 
 | Requisição | Status | Resultado |
 |---|---|---|
-| `POST` válido | 201 | veículo criado; placa gravada como `ABC1D23` (`strip().upper()`) |
+| `POST` válido | 201 | veículo criado para o usuário logado; placa gravada como `ABC1D23` (`strip().upper()`) |
+| `POST` sem token | 401 | `Not authenticated` |
 | `POST` com `id`, `id_usuario` ou `criado_em` | 422 | `extra_forbidden` (mass assignment barrado) |
 | `POST` com `km_atual: -1` | 422 | `greater_than_equal` |
 | `POST` elétrico com cilindrada | 422 | "Veículo elétrico não tem cilindrada." |
@@ -227,33 +303,36 @@ Respostas observadas:
 | `PATCH {}` | 200 | nada muda |
 | `PATCH {"marca": null}` | 422 | campo obrigatório no banco não aceita `null` |
 | `PATCH {"motor": null}` / `{"cilindrada": null}` | 200 | campos opcionais aceitam `null` |
-| `PATCH {"combustivel": "ELETRICO"}` em veículo com cilindrada | 422 | recusado pelo banco (`IntegrityError`), resposta genérica |
+| `PATCH {"combustivel": "ELETRICO"}` em veículo com cilindrada | 422 | "Veículo elétrico não tem cilindrada." |
 | `PATCH {"ano_modelo": 2025}` em veículo de 2018 | 422 | regra dos anos checada sobre os valores finais; nada é gravado |
-| `PATCH` em id inexistente | 404 | `Veículo não encontrado.` |
+| `PATCH {"id_usuario": 5}` | 422 | o dono não muda por PATCH |
+| `PATCH` ou `DELETE` em id inexistente ou de outro usuário | 404 | `Veículo não encontrado.` |
 | `DELETE` de veículo sem orçamentos | 204 | apagado; o `GET` seguinte dá 404 |
-| `DELETE /veiculos/1` (tem orçamentos) | 409 | `Veículo possui orçamentos vinculados. Não é possível apagar o veículo.` |
+| `DELETE /veiculos/1` pelo dono (tem orçamentos) | 409 | `Veículo possui orçamentos vinculados. Não é possível apagar o veículo.` |
 
 Decisões:
 
-- **Entrada separada da resposta:** o cliente não escolhe `id`, `id_usuario` nem `criado_em`. O `id_usuario` vem de uma constante do servidor (`ID_USUARIO_CONSTANTE = 1`).
+- **Entrada separada da resposta:** o cliente não escolhe `id`, `id_usuario` nem `criado_em`. O `id_usuario` vem do token.
 - **`forbid` na entrada:** campo desconhecido gera erro 422 em vez de ser ignorado em silêncio. O `forbid` só vale onde chega dado de fora; a resposta é montada pelo servidor.
 - **`PATCH` com `exclude_unset=True`:** aplica só o que o cliente enviou. O padrão `None` do schema nunca chega ao banco. Campos obrigatórios no banco recusam `null` enviado, mas podem ser omitidos.
-- **Regras entre campos:** a regra dos anos e a de elétrico sem cilindrada ficam em validadores do schema (`POST`). No `PATCH`, a regra dos anos é checada na rota, sobre os valores finais do veículo, porque o schema só enxerga o corpo. A regra do elétrico no `PATCH` fica a cargo do `CHECK` do banco.
+- **Regras entre campos em um lugar só:** a regra dos anos e a do elétrico sem cilindrada ficam em `api/regras.py`. O schema (`POST`) e a rota (`PATCH`, sobre os valores finais do veículo, porque o schema só enxerga o corpo) chamam as mesmas funções.
 - **Limites espelham as colunas:** além dos mínimos, o schema impõe máximos (`km_atual` até 6.000.000; `cilindrada` com `max_digits=3`, `decimal_places=1`, sem infinito nem `NaN`; textos com o tamanho do `varchar`), para o erro do cliente virar 422 e não 500.
 - **Placa normalizada na gravação:** `strip().upper()`, igual à busca. Aceita `null`, e a placa não é única.
 - **Erros do banco:** `IntegrityError` no `commit` gera `rollback` e resposta genérica (422 no cadastro e na alteração, 409 na exclusão). O detalhe vai só para o terminal.
 - **Exclusão bloqueada com vínculos:** a chave estrangeira não tem `ON DELETE`, então o banco impede apagar veículo com orçamentos. Foi mantido assim de propósito para não destruir histórico.
 
-### Bateria de segurança do CRUD
+### Bateria de segurança
 
-Rodada em banco novo (schema + seed), com a API no ar. Todos os casos passaram:
+Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos passaram.
+
+**CRUD de veículos** (`exercicios/testa_schema.py --api`, já autenticado):
 
 | Ataque | Resultado |
 |---|---|
 | S1: `POST` com `id`, `id_usuario` ou `criado_em` | 422 `extra_forbidden` |
-| S2: `POST` com `marca = '; DROP TABLE veiculos;--` | 201, texto gravado igual ao enviado; `GET /veiculos/1` segue 200 |
+| S2: `POST` com `marca = '; DROP TABLE veiculos;--` | 201, texto gravado igual ao enviado; a tabela segue intacta |
 | S3: `PATCH` com placa `' OR '1'='1` (11 caracteres) | 422 `string_too_long` |
-| S3: `PATCH` com placa `'OR 1=1--` (9 caracteres) e busca por ela | 200; a busca devolve só o veículo alterado, nunca o veículo 1 |
+| S3: `PATCH` com placa `'OR 1=1--` (9 caracteres) e busca por ela | 200; a busca devolve só o veículo alterado |
 | S4: `marca` e `modelo` com 10.000 caracteres | 422 `string_too_long` |
 | S5: cilindrada `"inf"` e `"NaN"` | 422 `finite_number` |
 | S5: `turbo = "talvez"` | 422 `bool_parsing` |
@@ -261,17 +340,47 @@ Rodada em banco novo (schema + seed), com a API no ar. Todos os casos passaram:
 | S5: `km_atual = 99999999999` | 422 `less_than_equal` |
 | S6: respostas de `POST` e `PATCH` | sem `placa`, `id_usuario` e `criado_em` |
 
-O S2 repete pela escrita o laboratório de SQL Injection: o `INSERT` envia o valor como parâmetro, então o texto malicioso é só dado. A bateria também achou falhas reais antes das correções: cilindrada `100` e `km_atual` enorme davam 500, porque o schema validava só o mínimo. Hoje o schema valida os máximos.
+**Login e token** (`testa_login.py` e a `usuario_atual`):
 
-### Limitações conhecidas do CRUD
+| Ataque | Resultado |
+|---|---|
+| Senha errada × e-mail inexistente | 401 com a mesma mensagem; tempo médio 0,063 s × 0,060 s |
+| Usuário do seed (hash inválido no banco) | 401, nunca 500 |
+| Senha de 129 caracteres, campo extra | 422 |
+| Sem token, texto qualquer no lugar do token | 401 |
+| Token com um caractere trocado (adulterado) | 401 |
+| Token expirado | 401 |
+| Token assinado com outro segredo | 401 |
+| Token `alg: none` (sem assinatura) | 401 |
+| Token sem `exp` | 401 |
+| Token com `sub` que não é número | 401 (não 500) |
+| Token válido de usuário apagado | 401 |
+
+**Posse dos dados, com dois usuários** (`testa_posse.py`):
+
+| Ataque | Resultado |
+|---|---|
+| Criar veículo sem token ou com token falso | 401 |
+| Dono gravado | é o do token (e muda de um usuário para outro) |
+| Outro usuário lê por id ou por placa | 404, idêntico ao de veículo inexistente |
+| Outro usuário altera | 404, e o veículo não muda |
+| `PATCH` com `id_usuario` de outro | 422; o dono não muda |
+| Outro usuário apaga | 404, e o veículo continua existindo |
+| `PATCH` e `DELETE` sem token | 401 |
+
+**Com os dados do seed** (`testa_seed.py`, usuários de exemplo com senha local): os três usuários logam; só o dono vê o veículo 1; o dono recebe 409 ao apagar (tem orçamentos); os outros dois recebem 404.
+
+### Limitações conhecidas
 
 | Limitação | Detalhe | Quando resolver |
 |---|---|---|
-| Sem login (IDOR) | qualquer pessoa altera ou apaga qualquer veículo sem orçamentos; `id_usuario` é fixo | S2 (login JWT) |
+| Sem limite de tentativas | login e cadastro aceitam tentativas ilimitadas (força bruta e teste de e-mails existentes) | S6 |
+| Token sem revogação | o token vale até expirar (30 min); não há logout nem refresh token. Usuário apagado é barrado na hora | futuro |
+| Senha só com espaços | uma senha de 8 espaços é aceita | revisar |
 | JSON com `Infinity` cru | corpo com a palavra `Infinity` (JSON inválido) devolve 500 em vez de 422: o erro estoura ao montar a própria resposta 422, que tenta devolver o valor recebido | investigar |
-| Regra dos anos duplicada | existe no schema `VeiculoCriar` e na rota `PATCH` | refatorar em uma função |
-| `print(e)` nos erros do banco | em produção deve ser log | S6 (`logging`) |
-| Mensagem do 409 | supõe que a causa é orçamento vinculado | revisar se outras tabelas apontarem para `veiculos` |
+| `print(e)` nos erros do banco | em produção deve ser log (e o `print` mostraria parâmetros da consulta) | S6 (`logging`) |
+| Mensagem do 409 do cadastro e do DELETE | supõem a causa sem checar | revisar quando outras tabelas apontarem para `veiculos` |
+| Testes fora do repositório | os scripts de teste ficam só na máquina do autor | S6: virar pytest |
 
 ### Laboratório de SQL Injection
 
@@ -333,11 +442,14 @@ database/
  └── diagrama.png    diagrama do banco
 
 api/
- ├── main.py         aplicação FastAPI e rotas
+ ├── main.py         aplicação FastAPI, rotas e a dependência usuario_atual
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
+ ├── config.py       configuração do token (lê JWT_SECRET do .env)
+ ├── seguranca.py    hash de senha (argon2) e token (JWT)
  ├── enums.py        TipoCombustivelEnum (combustíveis aceitos)
- ├── models.py       model Veiculo (SQLAlchemy), espelho da tabela
- └── schemas.py      schemas Pydantic: VeiculoCriar, VeiculoAtualizar (entrada) e VeiculoResposta (saída)
+ ├── regras.py       regras de negócio puras (anos, combustível × cilindrada)
+ ├── models.py       models Veiculo e Usuario (SQLAlchemy), espelho das tabelas
+ └── schemas.py      schemas Pydantic de entrada e de resposta
 
 alembic/
  ├── env.py          configuração: lê a DATABASE_URL e o model
@@ -356,7 +468,7 @@ alembic.ini          configuração do Alembic (sem senha)
 - [x] Modelagem do banco de dados
 - [x] Protótipo em terminal do cálculo e dos alertas
 - [x] API: CRUD de veículos (consultar, cadastrar, alterar, apagar)
-- [ ] API: autenticação (login) e dono do veículo
+- [x] API: cadastro de usuário, login (hash argon2 + JWT) e dono do veículo
 - [ ] Orçamentos, itens e histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
 - [ ] Motor de alertas
