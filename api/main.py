@@ -9,7 +9,6 @@ from api.models import Veiculo, Usuario
 from api.regras import ano_valido, combustivel_valido
 from api.seguranca import gerar_hash, verificar_senha, criar_token, ler_token
 
-ID_USUARIO_CONSTANTE = 1
 HASH_FALSO = gerar_hash('qualquer-coisa') 
 
 app = FastAPI()
@@ -197,9 +196,3 @@ def usuario_login(dados_usuario: LoginEntrada):
         raise HTTPException(status_code = 401, detail = 'E-mail ou senha incorretos.', headers = {'WWW-Authenticate': 'Bearer'})
 
     return {'access_token': criar_token(usuario.id), 'token_type': 'bearer'}
-
-    
-@app.get('/eu')
-def quem_sou_eu(id_usuario = Depends(usuario_atual)):
-    return {'id': id_usuario}
-
