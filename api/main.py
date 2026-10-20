@@ -19,6 +19,24 @@ esquema_oauth = OAuth2PasswordBearer(tokenUrl='/login')
 async def root():
     return {"message": "Hello World"}
 
+def usuario_atual(token: str = Depends(esquema_oauth)):
+    id_usuario = ler_token(token)
+
+    if id_usuario is None:
+        raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
+
+    try:
+        id_usuario = int(id_usuario)
+    except (ValueError, KeyError):
+        raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
+    
+    with Session(engine) as session:
+        usuario = session.get(Usuario, id_usuario)
+        if usuario is None:
+            raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
+
+        return id_usuario
+
 @app.get('/veiculos/{veiculo_id}', response_model = VeiculoResposta)
 def get_veiculo_id(veiculo_id: int):
     
@@ -49,7 +67,7 @@ def get_veiculo_placa(veiculo_placa: str = Path(max_length = 10)):
             raise HTTPException(status_code=404, detail='Veículo não encontrado.')
 
 @app.post('/veiculos', response_model = VeiculoResposta, status_code = 201)
-def veiculo_criar(dados_veiculo: VeiculoCriar):
+def veiculo_criar(dados_veiculo: VeiculoCriar, id_usuario_validado: int = Depends(usuario_atual)):
 
     with Session(engine) as session:
         veiculo_tratado = dados_veiculo.model_dump()
@@ -59,7 +77,7 @@ def veiculo_criar(dados_veiculo: VeiculoCriar):
 
         veiculo_novo = Veiculo(
             **veiculo_tratado,
-            id_usuario = ID_USUARIO_CONSTANTE # TODO S2: vem do login
+            id_usuario = id_usuario_validado
         ) 
 
         session.add(veiculo_novo)
@@ -176,23 +194,6 @@ def usuario_login(dados_usuario: LoginEntrada):
 
     return {'access_token': criar_token(usuario.id), 'token_type': 'bearer'}
 
-def usuario_atual(token: str = Depends(esquema_oauth)):
-    id_usuario = ler_token(token)
-
-    if id_usuario is None:
-        raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
-
-    try:
-        id_usuario = int(id_usuario)
-    except (ValueError, KeyError):
-        raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
-    
-    with Session(engine) as session:
-        usuario = session.get(Usuario, id_usuario)
-        if usuario is None:
-            raise HTTPException(status_code = 401, detail = 'Token inválido.', headers = {'WWW-Authenticate': 'Bearer'})
-
-        return id_usuario
     
 @app.get('/eu')
 def quem_sou_eu(id_usuario = Depends(usuario_atual)):
