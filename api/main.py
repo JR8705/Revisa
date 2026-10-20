@@ -94,11 +94,13 @@ def veiculo_criar(dados_veiculo: VeiculoCriar, id_usuario_validado: int = Depend
 
 
 @app.patch('/veiculos/{veiculo_id}', response_model = VeiculoResposta)
-def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar):
+def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar, id_usuario_validado: int = Depends(usuario_atual)):
 
     with Session(engine) as session:
 
-        veiculo_existente = session.get(Veiculo, veiculo_id)
+        veiculo_existente = session.scalars(
+            select(Veiculo).where(Veiculo.id == veiculo_id, Veiculo.id_usuario == id_usuario_validado)
+        ).first()
 
         if not veiculo_existente:
             raise HTTPException(status_code = 404, detail = 'Veículo não encontrado.')
@@ -124,7 +126,7 @@ def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar):
 
         except IntegrityError as e:
             session.rollback()
-            print(e) # TODO S6: usar logging
+            #print(e) TODO S6: usar logging
             raise HTTPException(status_code = 422, detail = 'Dados recusados pelo banco.')
         
         session.refresh(veiculo_existente)
@@ -132,11 +134,13 @@ def veiculo_alterar(veiculo_id: int, dados_veiculo: VeiculoAtualizar):
 
 
 @app.delete('/veiculos/{veiculo_id}', status_code = 204)
-def veiculo_delete(veiculo_id: int):
+def veiculo_delete(veiculo_id: int, id_usuario_validado: int = Depends(usuario_atual)):
 
     with Session(engine) as session:
 
-        veiculo = session.get(Veiculo, veiculo_id)
+        veiculo = session.scalars(
+            select(Veiculo).where(Veiculo.id == veiculo_id, Veiculo.id_usuario == id_usuario_validado)
+        ).first()
 
         if not veiculo:
             raise HTTPException(status_code = 404, detail = 'Veículo não encontrado.')
@@ -145,12 +149,12 @@ def veiculo_delete(veiculo_id: int):
 
         try: 
             session.commit()
-            return
         
         except IntegrityError as e:
             session.rollback()
-            print(e) # TODO S6: usar logging
+            #print(e)  TODO S6: usar logging
             raise HTTPException(status_code = 409, detail = 'Veículo possui orçamentos vinculados. Não é possível apagar o veículo.')
+        
 
 @app.post('/usuarios', response_model = UsuarioResposta, status_code = 201)
 def usuario_criar(dados_usuario: UsuarioCriar):
