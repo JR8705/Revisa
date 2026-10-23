@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from api.database import engine
-from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
-from api.models import Veiculo, Usuario
+from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, OrcamentoResposta, OrcamentoCriar, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
+from api.models import Veiculo, Usuario, Orcamento, Oficina
 from api.regras import ano_valido, combustivel_valido
 from api.seguranca import gerar_hash, verificar_senha, criar_token, ler_token
 
@@ -196,3 +196,35 @@ def usuario_login(dados_usuario: LoginEntrada):
         raise HTTPException(status_code = 401, detail = 'E-mail ou senha incorretos.', headers = {'WWW-Authenticate': 'Bearer'})
 
     return {'access_token': criar_token(usuario.id), 'token_type': 'bearer'}
+
+@app.post('/veiculos/{veiculo_id}/orcamentos', response_model = OrcamentoResposta, status_code = 201)
+def orcamento_criar(dados_orcamento: OrcamentoCriar, veiculo_id: int, id_usuario = Depends(usuario_atual)):
+
+    dados = dados_orcamento.model_dump()
+    
+    with Session(engine) as session:
+        veiculo = session.scalars(
+            select(Veiculo).where(Veiculo.id == veiculo_id, Veiculo.id_usuario == id_usuario)
+        ).first()
+    
+        if not veiculo:
+            raise HTTPException(status_code = 404, detail = 'Veículo não encontrado.')
+        
+        check_oficina = session.get(Oficina, dados['id_oficina'])
+        if check_oficina is None:
+            raise HTTPException(status_code = 422, detail = 'Oficina inválida.')
+
+        orcamento = Orcamento(id_veiculo = veiculo.id, **dados)
+
+        session.add(orcamento)
+
+        try: 
+            session.commit()
+                
+        except IntegrityError:
+            session.rollback()
+            # print(e) TODO S6: usar logging
+            raise HTTPException(status_code = 422, detail = 'Oficina inválida.')
+                
+        session.refresh(orcamento)
+        return orcamento

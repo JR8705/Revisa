@@ -1,7 +1,8 @@
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
-from api.enums import TipoCombustivelEnum
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator, field_validator
+from api.enums import TipoCombustivelEnum, StatusOrcamentoEnum
+from datetime import date
 from decimal import Decimal
-from api.regras import ano_valido, combustivel_valido
+from api.regras import ano_valido, combustivel_valido, emissao_valida
 class VeiculoResposta(BaseModel):
     model_config = ConfigDict(from_attributes = True)
 
@@ -62,6 +63,34 @@ class VeiculoAtualizar(BaseModel):
     ano_modelo: int = Field(default = None,ge = 1886, le = 2027)
     km_atual: int = Field(default = None, ge = 0, le = 6000000)
 
+
+class OrcamentoResposta(BaseModel):
+    model_config = ConfigDict(from_attributes = True)
+
+    id: int
+    id_veiculo: int
+    id_oficina: int
+    data_emissao: date
+    km: int
+    status: StatusOrcamentoEnum
+
+class OrcamentoCriar(BaseModel):
+    model_config = ConfigDict(extra = 'forbid')
+
+    id_oficina: int = Field(gt = 0)
+    data_emissao: date
+    km: int = Field(ge = 0, le = 6000000)
+
+    @field_validator('data_emissao')
+    @classmethod
+    def verificar_emissao(cls, data_emissao: date) -> date:
+
+        if not emissao_valida(data_emissao):
+            raise ValueError(
+                'A data de emissão não pode ser maior que a data atual.'
+                )
+        return data_emissao
+    
 class UsuarioResposta(BaseModel):
     model_config = ConfigDict(from_attributes = True)
 
