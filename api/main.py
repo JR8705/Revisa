@@ -4,9 +4,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from api.database import engine
-from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, OrcamentoResposta, OrcamentoCriar, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
-from api.models import Veiculo, Usuario, Orcamento, Oficina
-from api.regras import ano_valido, combustivel_valido
+from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, OrcamentoResposta, OrcamentoCriar, OrcamentoDetalheResposta, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
+from api.models import Veiculo, Usuario, Orcamento, ItemOrcamento, Oficina
+from api.regras import ano_valido, combustivel_valido, calcular_total, calcular_subtotal
 from api.seguranca import gerar_hash, verificar_senha, criar_token, ler_token
 
 HASH_FALSO = gerar_hash('qualquer-coisa') 
@@ -228,3 +228,41 @@ def orcamento_criar(dados_orcamento: OrcamentoCriar, veiculo_id: int, id_usuario
                 
         session.refresh(orcamento)
         return orcamento
+
+
+@app.get('/veiculos/{veiculo_id}/orcamentos/{orcamento_id}', response_model = OrcamentoDetalheResposta)
+def get_orcamento_id(veiculo_id: int, orcamento_id: int, id_usuario = Depends(usuario_atual)):
+
+    with Session(engine) as session:
+        itens = []
+        subtotais = []
+
+        orcamento = session.scalars(
+            select(Orcamento).join(Veiculo).where(Orcamento.id == orcamento_id, Orcamento.id_veiculo == veiculo_id, Veiculo.id_usuario == id_usuario)
+        ).first()
+
+        if not orcamento:
+            raise HTTPException(status_code = 404, detail = 'Orçamento não encontrado.') 
+
+        itens_orcamento = session.scalars(
+            select(ItemOrcamento).where(ItemOrcamento.id_orcamento == orcamento.id).order_by(ItemOrcamento.id)
+        ).all()
+
+        for item in itens_orcamento:
+            subtotal = calcular_subtotal(item.quantidade, item.valor_unitario)
+            subtotais.append(subtotal)
+            itens.append({
+                'id': item.id,
+                'id_categoria': item.id_categoria,
+                'descricao': item.descricao,
+                'tipo': item.tipo,
+                'quantidade': item.quantidade,
+                'valor_unitario': item.valor_unitario,
+                'subtotal': subtotal
+            })
+
+        return {
+            **OrcamentoResposta.model_validate(orcamento).model_dump(),
+            'itens': itens,
+            'total': calcular_total(subtotais)
+            }

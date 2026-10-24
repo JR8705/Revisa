@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator, field_validator
-from api.enums import TipoCombustivelEnum, StatusOrcamentoEnum
+from api.enums import TipoCombustivelEnum, StatusOrcamentoEnum, TipoItemEnum
 from datetime import date
 from decimal import Decimal
 from api.regras import ano_valido, combustivel_valido, emissao_valida
@@ -63,7 +63,6 @@ class VeiculoAtualizar(BaseModel):
     ano_modelo: int = Field(default = None,ge = 1886, le = 2027)
     km_atual: int = Field(default = None, ge = 0, le = 6000000)
 
-
 class OrcamentoResposta(BaseModel):
     model_config = ConfigDict(from_attributes = True)
 
@@ -90,6 +89,22 @@ class OrcamentoCriar(BaseModel):
                 'A data de emissão não pode ser maior que a data atual.'
                 )
         return data_emissao
+
+class ItemOrcamentoResposta(BaseModel):
+    model_config = ConfigDict(from_attributes = True)
+
+    id: int
+    id_categoria: int
+    descricao: str
+    tipo: TipoItemEnum
+    quantidade: Decimal
+    valor_unitario: Decimal
+    subtotal: Decimal
+
+class OrcamentoDetalheResposta(OrcamentoResposta):
+
+    itens: list[ItemOrcamentoResposta]
+    total: Decimal
     
 class UsuarioResposta(BaseModel):
     model_config = ConfigDict(from_attributes = True)
