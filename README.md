@@ -2,7 +2,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT) e o CRUD de veículos, em que cada usuário só enxerga e altera os próprios veículos. Orçamentos, itens e alertas ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos e o registro de orçamentos com itens e total calculado. Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. Alertas, aprovação de orçamento e manutenções ainda serão criados.
 
 ## O problema
 
@@ -80,7 +80,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: cadastro, login e CRUD de veículos estão prontos; orçamentos e itens ainda serão criados.
+> Em construção: cadastro, login, CRUD de veículos, orçamentos e itens estão prontos; aprovação de orçamento, alertas e manutenções ainda serão criados.
 
 Pré-requisitos: Python 3.10 ou superior e o banco criado conforme a seção anterior.
 
@@ -139,7 +139,7 @@ O `schema.sql` é mantido igual ao resultado das migrações: um banco criado do
 
 O `alembic/env.py` lê a conexão da mesma `DATABASE_URL` do `.env` usada pela API, então o `alembic.ini` continua só com o endereço de exemplo e nenhuma senha vai para o repositório.
 
-**Atenção:** o model ainda descreve apenas as tabelas `veiculos` e `usuarios`. Por isso o `alembic revision --autogenerate` hoje propõe apagar as outras tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
+**Atenção:** o model descreve `usuarios`, `veiculos`, `oficinas`, `categorias_item`, `orcamentos` e `itens_orcamento`, mas ainda não `precos_referencia`, `alertas` e `manutencoes`. Por isso o `alembic revision --autogenerate` hoje propõe apagar essas três tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
 
 Com o servidor rodando, a documentação interativa da API fica em `http://127.0.0.1:8000/docs`.
 
@@ -153,6 +153,9 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 | `POST /veiculos` | **token** | Cadastra um veículo para o usuário logado (201) |
 | `PATCH /veiculos/{veiculo_id}` | **token** | Altera só os campos enviados (200) |
 | `DELETE /veiculos/{veiculo_id}` | **token** | Apaga um veículo (204); 409 se tiver orçamentos |
+| `POST /veiculos/{veiculo_id}/orcamentos` | **token** | Registra um orçamento no veículo do usuário logado; nasce `PENDENTE` (201) |
+| `GET /veiculos/{veiculo_id}/orcamentos/{orcamento_id}` | **token** | Devolve o orçamento com os itens, o subtotal de cada um e o total (200) |
+| `POST /veiculos/{veiculo_id}/orcamentos/{orcamento_id}/itens` | **token** | Acrescenta um item a um orçamento `PENDENTE` (201); 409 se o orçamento não estiver pendente |
 
 O token vai no cabeçalho `Authorization: Bearer <token>`. No `/docs`, o botão **Authorize** faz isso.
 
@@ -218,10 +221,10 @@ As rotas não escrevem SQL à mão. Cada peça tem um papel:
 | `api/database.py` | Cria a conexão (`engine`) a partir da `DATABASE_URL` |
 | `api/config.py` | Lê o `JWT_SECRET` do `.env` e valida o tamanho; define algoritmo e expiração do token |
 | `api/seguranca.py` | Hash e verificação de senha (argon2) e criação e leitura do token (JWT) |
-| `api/enums.py` | `TipoCombustivelEnum`: os combustíveis aceitos, compartilhados pelo model e pelo schema |
-| `api/regras.py` | Regras de negócio puras (`ano_valido`, `combustivel_valido`), usadas pelo schema e pela rota |
-| `api/models.py` | Models `Veiculo` e `Usuario` (SQLAlchemy): as tabelas descritas em Python, inclusive colunas internas e pessoais |
-| `api/schemas.py` | Schemas Pydantic: entrada (`VeiculoCriar`, `VeiculoAtualizar`, `UsuarioCriar`, `LoginEntrada`) e resposta (`VeiculoResposta`, `UsuarioResposta`, `TokenResposta`) |
+| `api/enums.py` | Valores aceitos, compartilhados pelo model e pelo schema: `TipoCombustivelEnum`, `GrupoItemEnum`, `StatusOrcamentoEnum` e `TipoItemEnum` |
+| `api/regras.py` | Regras de negócio puras, usadas pelo schema e pela rota: `ano_valido`, `combustivel_valido`, `emissao_valida`, `calcular_subtotal` e `calcular_total` |
+| `api/models.py` | Models `Usuario`, `Veiculo`, `Oficina`, `CategoriaItem`, `Orcamento` e `ItemOrcamento` (SQLAlchemy): as tabelas descritas em Python, inclusive colunas internas e pessoais |
+| `api/schemas.py` | Schemas Pydantic: entrada (`VeiculoCriar`, `VeiculoAtualizar`, `UsuarioCriar`, `LoginEntrada`, `OrcamentoCriar`, `ItemOrcamentoCriar`) e resposta (`VeiculoResposta`, `UsuarioResposta`, `TokenResposta`, `OrcamentoResposta`, `OrcamentoDetalheResposta`, `ItemOrcamentoResposta`) |
 | `api/main.py` | Rotas e a dependência `usuario_atual` |
 
 ```
@@ -321,6 +324,104 @@ Decisões:
 - **Erros do banco:** `IntegrityError` no `commit` gera `rollback` e resposta genérica (422 no cadastro e na alteração, 409 na exclusão). O detalhe vai só para o terminal.
 - **Exclusão bloqueada com vínculos:** a chave estrangeira não tem `ON DELETE`, então o banco impede apagar veículo com orçamentos. Foi mantido assim de propósito para não destruir histórico.
 
+### Orçamentos e itens
+
+O orçamento não tem `id_usuario`: o dono vem do veículo (`orçamento → veículo → usuário`). Por isso toda consulta de orçamento junta as duas tabelas e confere o dono **dentro do `WHERE`**, com três condições juntas: o id do orçamento, o id do veículo da URL e o dono do veículo.
+
+```
+token → id do usuário → o orçamento existe, é do veículo da URL e o veículo é do usuário? → só então lê ou grava
+```
+
+| Schema | Uso | Regras |
+|---|---|---|
+| `OrcamentoCriar` | corpo do `POST` de orçamento | `id_oficina` > 0; `data_emissao` não pode ser futura; `km` de 0 a 6.000.000; `extra = 'forbid'` |
+| `ItemOrcamentoCriar` | corpo do `POST` de item | `descricao` de 1 a 255 caracteres (sem espaços nas pontas); `quantidade` > 0; `valor_unitario` ≥ 0; ambos até 10 dígitos com 2 decimais, sem infinito nem `NaN`; `extra = 'forbid'` |
+| `OrcamentoResposta` | resposta do `POST` de orçamento | lista branca: sem `criado_em`, `arquivo_url` e `texto_extraido` |
+| `ItemOrcamentoResposta` | cada item nas respostas | inclui o `subtotal`; sem `id_orcamento` |
+| `OrcamentoDetalheResposta` | resposta do `GET` | o orçamento, mais `itens` e `total` |
+
+Exemplo de `POST /veiculos/9/orcamentos` (com o cabeçalho `Authorization`):
+
+```json
+{"id_oficina": 1, "data_emissao": "2026-10-20", "km": 31000}
+```
+
+Resposta (201): o status nasce `PENDENTE` e não é escolhido pelo cliente.
+
+```json
+{"id": 15, "id_veiculo": 9, "id_oficina": 1, "data_emissao": "2026-10-20", "km": 31000, "status": "PENDENTE"}
+```
+
+Exemplo de `POST /veiculos/9/orcamentos/15/itens`:
+
+```json
+{"id_categoria": 10, "descricao": "Pastilha de freio dianteira", "tipo": "PECA", "quantidade": "2.00", "valor_unitario": "10.50"}
+```
+
+Resposta (201), com o subtotal calculado pelo servidor:
+
+```json
+{"id": 62, "id_categoria": 10, "descricao": "Pastilha de freio dianteira", "tipo": "PECA", "quantidade": "2.00", "valor_unitario": "10.50", "subtotal": "21.00"}
+```
+
+Resposta de `GET /veiculos/1/orcamentos/3` (com o token do dono do veículo e os dados do `seed.sql`; o orçamento tem a bomba d'água lançada duas vezes):
+
+```json
+{
+  "id": 3, "id_veiculo": 1, "id_oficina": 3, "data_emissao": "2026-09-20", "km": 97900, "status": "RECUSADO",
+  "itens": [
+    {"id": 10, "id_categoria": 13, "descricao": "Kit correia dentada + tensor", "tipo": "PECA", "quantidade": "1.00", "valor_unitario": "690.00", "subtotal": "690.00"},
+    {"id": 11, "id_categoria": 17, "descricao": "Bomba d'água", "tipo": "PECA", "quantidade": "1.00", "valor_unitario": "380.00", "subtotal": "380.00"},
+    {"id": 12, "id_categoria": 17, "descricao": "Bomba d'água", "tipo": "PECA", "quantidade": "1.00", "valor_unitario": "380.00", "subtotal": "380.00"},
+    {"id": 13, "id_categoria": 29, "descricao": "Material diverso", "tipo": "PECA", "quantidade": "1.00", "valor_unitario": "150.00", "subtotal": "150.00"},
+    {"id": 14, "id_categoria": 4, "descricao": "Líquido de arrefecimento (litro)", "tipo": "PECA", "quantidade": "3.00", "valor_unitario": "32.00", "subtotal": "96.00"},
+    {"id": 15, "id_categoria": 28, "descricao": "Mão de obra correia e bomba d'água", "tipo": "MAO_OBRA", "quantidade": "1.00", "valor_unitario": "450.00", "subtotal": "450.00"}
+  ],
+  "total": "2146.00"
+}
+```
+
+Respostas observadas:
+
+| Requisição | Status | Resultado |
+|---|---|---|
+| `POST` de orçamento válido | 201 | orçamento criado com `status` `PENDENTE`, sem `criado_em` |
+| `POST` de orçamento com `km` menor que o `km_atual` do veículo | 201 | permitido: um orçamento antigo é legítimo |
+| `POST` de orçamento sem token | 401 | `Not authenticated` |
+| `POST` de orçamento em veículo de outro usuário ou inexistente | 404 | `Veículo não encontrado.`, nada é gravado |
+| `POST` de orçamento com `id`, `id_veiculo`, `status` ou `criado_em` | 422 | `extra_forbidden` (mass assignment barrado) |
+| `POST` de orçamento com `id_oficina` inexistente | 422 | `Oficina inválida.` |
+| `POST` de orçamento com `km` negativo ou enorme, data futura ou data inválida | 422 | erro de validação |
+| `GET` do orçamento pelo dono | 200 | orçamento, itens, subtotais e total |
+| `GET` sem token | 401 | `Not authenticated` |
+| `GET` por outro usuário, com o veículo do dono | 404 | `Orçamento não encontrado.` |
+| `GET` por outro usuário, com **o próprio veículo** e o orçamento do dono | 404 | a mesma resposta |
+| `GET` pelo dono com um veículo dele que não é o do orçamento | 404 | a mesma resposta |
+| `GET` de ids inexistentes | 404 | a mesma resposta, idêntica nos quatro casos |
+| `GET` com `orcamento_id` não numérico | 422 | erro de validação |
+| `POST` de item válido | 201 | item criado, com `subtotal` |
+| `POST` de item em orçamento alheio, com veículo alheio ou que não combina | 404 | `Orçamento não encontrado.`, nada é gravado |
+| `POST` de item em orçamento `APROVADO` ou `RECUSADO` | 409 | `Não é possível alterar este orçamento.` |
+| `POST` de item com `id_categoria` inexistente | 422 | `Categoria inválida.` |
+| `POST` de item com `id`, `id_orcamento` ou `subtotal` | 422 | `extra_forbidden` |
+| `POST` de item com `descricao` vazia, só com espaços ou com 256 caracteres | 422 | erro de validação |
+| `POST` de item com `quantidade` 0, negativa, `inf` ou `NaN` | 422 | erro de validação |
+| `POST` de item com `valor_unitario` negativo ou com 11 dígitos | 422 | erro de validação |
+| `POST` de item com `valor_unitario` 0 | 201 | permitido: o banco aceita e o alerta `VALOR_ZERADO` existe para esse caso |
+
+Decisões:
+
+- **Dono pela junção, no `WHERE`:** o orçamento alheio simplesmente não existe para quem pergunta. O erro é 404 e não 403, para não confirmar que ele existe.
+- **Os dois ids da URL precisam casar:** um usuário que passa o **próprio** `veiculo_id` com o `orcamento_id` de outro também recebe 404. Checar só o veículo abriria essa brecha.
+- **Mesma resposta nos quatro 404:** orçamento alheio, veículo alheio, ids que não combinam e ids inexistentes devolvem o mesmo status e o mesmo corpo.
+- **Ids vêm do objeto validado:** `id_veiculo` e `id_orcamento` gravados são os do veículo e do orçamento que a consulta devolveu, nunca o texto da URL e nunca o corpo.
+- **Status não é escolhido pelo cliente:** o orçamento nasce `PENDENTE`. Item só entra em orçamento `PENDENTE`, para o total não mudar depois da decisão do dono (409 com conflito de estado).
+- **Total e subtotal calculados pelo servidor:** funções puras em `api/regras.py` (`calcular_subtotal`, `calcular_total`), sem acesso ao banco. O cliente não tem como mandar um total. Os valores usam `Decimal` e saem como texto no JSON (`"2146.00"`).
+- **Arredondamento por item:** cada subtotal é arredondado para 2 casas e o total é a soma deles (padrão `ROUND_HALF_EVEN` do Python; ver limitações).
+- **`km` menor que o do veículo é permitido,** e a data de emissão não pode ser futura (`emissao_valida`).
+- **Oficinas e categorias são um catálogo compartilhado,** sem dono. O cliente só escolhe por id. A existência é conferida antes de gravar (422 limpo), e o `IntegrityError` no `commit` continua como rede de segurança.
+- **Limites espelham as colunas:** `descricao` até 255, `quantidade` e `valor_unitario` em `numeric(10,2)`, para o erro do cliente virar 422 e não 500.
+
 ### Bateria de segurança
 
 Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos passaram.
@@ -370,6 +471,30 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 
 **Com os dados do seed** (`testa_seed.py`, usuários de exemplo com senha local): os três usuários logam; só o dono vê o veículo 1; o dono recebe 409 ao apagar (tem orçamentos); os outros dois recebem 404.
 
+**Orçamentos e itens, com dois usuários** (`testa_orcamento.py`, `testa_orcamento_get.py` e `testa_item_criar.py`):
+
+| Ataque | Resultado |
+|---|---|
+| Criar orçamento no veículo de outro usuário | 404, e a contagem de orçamentos do veículo não muda |
+| Veículo inexistente × veículo alheio | 404 com o mesmo corpo |
+| `id`, `id_veiculo`, `status` ou `criado_em` no corpo do orçamento | 422 `extra_forbidden`, um campo por vez |
+| `id_oficina` inexistente | 422, nunca 500 |
+| `km` negativo, `km` com 11 dígitos, data futura, data `abc` | 422 |
+| Ler o orçamento de outro usuário com o veículo do dono | 404 |
+| **Ler o orçamento do dono com o próprio veículo** (IDOR aninhado) | 404 |
+| Ler o orçamento de um veículo com o `veiculo_id` de outro veículo do mesmo dono | 404 |
+| Os quatro 404 da leitura | corpos idênticos |
+| Resposta da leitura | sem `criado_em`, `arquivo_url` e `texto_extraido`; `total` como texto |
+| Orçamento 3 do seed pelo dono | 200, 6 itens, total `"2146.00"` |
+| Criar item em orçamento alheio, com veículo alheio ou que não combina | 404, e a contagem de itens não muda |
+| `id`, `id_orcamento` ou `subtotal` no corpo do item | 422 `extra_forbidden`, um campo por vez |
+| `id_categoria` inexistente | 422, nunca 500 |
+| `descricao` vazia, só com espaços ou com 256 caracteres | 422 |
+| `quantidade` 0, negativa, `inf` ou `NaN` | 422 |
+| `valor_unitario` negativo ou com 11 dígitos | 422 |
+| Item em orçamento `RECUSADO` | 409, e nada é gravado |
+| Item novo e `GET` seguinte | o total é recalculado pelo servidor |
+
 ### Limitações conhecidas
 
 | Limitação | Detalhe | Quando resolver |
@@ -380,6 +505,12 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | JSON com `Infinity` cru | corpo com a palavra `Infinity` (JSON inválido) devolve 500 em vez de 422: o erro estoura ao montar a própria resposta 422, que tenta devolver o valor recebido | investigar |
 | `print(e)` nos erros do banco | em produção deve ser log (e o `print` mostraria parâmetros da consulta) | S6 (`logging`) |
 | Mensagem do 409 do cadastro e do DELETE | supõem a causa sem checar | revisar quando outras tabelas apontarem para `veiculos` |
+| Arredondamento do banqueiro | os subtotais usam o padrão `ROUND_HALF_EVEN` do Python: `5.005` vira `5.00`. Pode divergir 1 centavo do valor impresso pela oficina. Decisão do autor: manter | revisar |
+| `data_emissao` sem piso | só barra datas futuras; uma data como `0001-01-01` é aceita | revisar |
+| Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça | motor de alertas (S4) |
+| Status do orçamento não muda pela API | não há rota para aprovar ou recusar; um orçamento `APROVADO` ou `RECUSADO` fica fechado para novos itens | aprovação (S5) |
+| Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
+| Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
 | Testes fora do repositório | os scripts de teste ficam só na máquina do autor | S6: virar pytest |
 
 ### Laboratório de SQL Injection
@@ -446,9 +577,9 @@ api/
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
  ├── config.py       configuração do token (lê JWT_SECRET do .env)
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
- ├── enums.py        TipoCombustivelEnum (combustíveis aceitos)
- ├── regras.py       regras de negócio puras (anos, combustível × cilindrada)
- ├── models.py       models Veiculo e Usuario (SQLAlchemy), espelho das tabelas
+ ├── enums.py        enums compartilhados (combustível, grupo, status e tipo de item)
+ ├── regras.py       regras de negócio puras (anos, combustível × cilindrada, data de emissão, subtotal e total)
+ ├── models.py       models de usuário, veículo, oficina, categoria, orçamento e item (SQLAlchemy), espelho das tabelas
  └── schemas.py      schemas Pydantic de entrada e de resposta
 
 alembic/
@@ -469,7 +600,8 @@ alembic.ini          configuração do Alembic (sem senha)
 - [x] Protótipo em terminal do cálculo e dos alertas
 - [x] API: CRUD de veículos (consultar, cadastrar, alterar, apagar)
 - [x] API: cadastro de usuário, login (hash argon2 + JWT) e dono do veículo
-- [ ] Orçamentos, itens e histórico de manutenções
+- [x] API: orçamentos e itens, com dono pelo veículo e total calculado
+- [ ] Aprovar ou recusar orçamento e histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
 - [ ] Motor de alertas
 - [ ] Comparador de orçamentos e aprovação
