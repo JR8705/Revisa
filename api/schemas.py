@@ -105,6 +105,16 @@ class OrcamentoDetalheResposta(OrcamentoResposta):
 
     itens: list[ItemOrcamentoResposta]
     total: Decimal
+
+
+class ItemOrcamentoCriar(BaseModel):
+    model_config = ConfigDict(extra = 'forbid', str_strip_whitespace = True)
+
+    id_categoria: int = Field(gt = 0)
+    descricao: str = Field(min_length = 1, max_length = 255)
+    tipo: TipoItemEnum
+    quantidade: Decimal = Field(gt = 0, max_digits = 10, decimal_places = 2, allow_inf_nan = False)
+    valor_unitario: Decimal = Field(ge = 0, max_digits = 10, decimal_places = 2,allow_inf_nan = False)
     
 class UsuarioResposta(BaseModel):
     model_config = ConfigDict(from_attributes = True)

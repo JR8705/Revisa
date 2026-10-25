@@ -4,10 +4,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from api.database import engine
-from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, OrcamentoResposta, OrcamentoCriar, OrcamentoDetalheResposta, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
-from api.models import Veiculo, Usuario, Orcamento, ItemOrcamento, Oficina
+from api.schemas import VeiculoResposta, VeiculoCriar, VeiculoAtualizar, OrcamentoResposta, OrcamentoCriar, OrcamentoDetalheResposta, ItemOrcamentoCriar, ItemOrcamentoResposta, UsuarioResposta, UsuarioCriar, LoginEntrada, TokenResposta
+from api.models import Veiculo, Usuario, Orcamento, ItemOrcamento, CategoriaItem, Oficina
 from api.regras import ano_valido, combustivel_valido, calcular_total, calcular_subtotal
 from api.seguranca import gerar_hash, verificar_senha, criar_token, ler_token
+from api.enums import StatusOrcamentoEnum
 
 HASH_FALSO = gerar_hash('qualquer-coisa') 
 
@@ -266,3 +267,52 @@ def get_orcamento_id(veiculo_id: int, orcamento_id: int, id_usuario = Depends(us
             'itens': itens,
             'total': calcular_total(subtotais)
             }
+
+
+@app.post('/veiculos/{veiculo_id}/orcamentos/{orcamento_id}/itens', response_model = ItemOrcamentoResposta, status_code = 201)
+def item_criar(veiculo_id: int, orcamento_id: int, item_dados: ItemOrcamentoCriar, id_usuario = Depends(usuario_atual)):
+
+    with Session(engine) as session:
+
+        orcamento = session.scalars(
+            select(Orcamento)
+            .join(Veiculo)
+            .where(
+                Orcamento.id == orcamento_id, 
+                Orcamento.id_veiculo == veiculo_id, 
+                Veiculo.id_usuario == id_usuario
+            )
+        ).first()
+        
+        if not orcamento:
+            raise HTTPException(status_code=404, detail = 'Orçamento não encontrado.')
+            
+        if orcamento.status != StatusOrcamentoEnum.PENDENTE:
+            raise HTTPException(status_code = 409, detail = 'Não é possível alterar este orçamento.')
+
+        categoria = session.get(CategoriaItem, item_dados.id_categoria)
+        if not categoria:
+            raise HTTPException(status_code=422, detail = 'Categoria inválida.')
+            
+        dados = item_dados.model_dump()
+        novo_item = ItemOrcamento(id_orcamento=orcamento.id, **dados)
+        
+        try:
+            session.add(novo_item)
+            session.commit()
+            session.refresh(novo_item)
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(status_code=422, detail='Dados do item inválidos.')
+
+        subtotal = calcular_subtotal(novo_item.quantidade, novo_item.valor_unitario)
+        
+        return {
+            'id': novo_item.id,
+            'id_categoria': novo_item.id_categoria,
+            'descricao': novo_item.descricao,
+            'tipo': novo_item.tipo,
+            'quantidade': novo_item.quantidade,
+            'valor_unitario': novo_item.valor_unitario,
+            'subtotal': subtotal
+        }
