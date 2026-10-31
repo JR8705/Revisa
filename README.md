@@ -2,7 +2,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos e o registro de orçamentos com itens e total calculado. Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. Alertas, aprovação de orçamento e manutenções ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos o registro de orçamentos com itens e total calculado e a aprovação ou recusa do orçamento. Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. Alertas e manutenções ainda serão criados.
 
 ## O problema
 
@@ -60,6 +60,7 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 | Banco de dados | PostgreSQL |
 | Back-end | Python, FastAPI, SQLAlchemy, Alembic |
 | Segurança | argon2 (hash de senha), PyJWT (token), email-validator |
+| Qualidade | ruff (lint e formatação) |
 | Testes | scripts de teste manuais; pytest planejado |
 | Infraestrutura | Docker, GitHub Actions (planejados) |
 
@@ -80,7 +81,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: cadastro, login, CRUD de veículos, orçamentos e itens estão prontos; aprovação de orçamento, alertas e manutenções ainda serão criados.
+> Em construção: cadastro, login, CRUD de veículos, orçamentos, itens e aprovação de orçamento estão prontos; alertas e manutenções ainda serão criados.
 
 Pré-requisitos: Python 3.10 ou superior e o banco criado conforme a seção anterior.
 
@@ -89,6 +90,13 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows
 source .venv/bin/activate       # Linux e macOS
 pip install -r requirements.txt
+```
+
+Para desenvolver (ruff e as bibliotecas usadas pelos testes), use `pip install -r requirements_dev.txt`, que já inclui o `requirements.txt`. Antes de cada commit:
+
+```bash
+ruff check api --fix
+ruff format api
 ```
 
 A conexão com o banco e o segredo do token são lidos de variáveis de ambiente, nunca escritos no código. Copie o modelo e preencha:
@@ -156,6 +164,7 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 | `POST /veiculos/{veiculo_id}/orcamentos` | **token** | Registra um orçamento no veículo do usuário logado; nasce `PENDENTE` (201) |
 | `GET /veiculos/{veiculo_id}/orcamentos/{orcamento_id}` | **token** | Devolve o orçamento com os itens, o subtotal de cada um e o total (200) |
 | `POST /veiculos/{veiculo_id}/orcamentos/{orcamento_id}/itens` | **token** | Acrescenta um item a um orçamento `PENDENTE` (201); 409 se o orçamento não estiver pendente |
+| `PATCH /veiculos/{veiculo_id}/orcamentos/{orcamento_id}` | **token** | Aprova ou recusa um orçamento `PENDENTE` (200); 409 se já tiver sido decidido ou se for aprovação sem itens |
 
 O token vai no cabeçalho `Authorization: Bearer <token>`. No `/docs`, o botão **Authorize** faz isso.
 
@@ -222,10 +231,10 @@ As rotas não escrevem SQL à mão. Cada peça tem um papel:
 | `api/config.py` | Lê o `JWT_SECRET` do `.env` e valida o tamanho; define algoritmo e expiração do token |
 | `api/seguranca.py` | Hash e verificação de senha (argon2) e criação e leitura do token (JWT) |
 | `api/enums.py` | Valores aceitos, compartilhados pelo model e pelo schema: `TipoCombustivelEnum`, `GrupoItemEnum`, `StatusOrcamentoEnum` e `TipoItemEnum` |
-| `api/regras.py` | Regras de negócio puras, usadas pelo schema e pela rota: `ano_valido`, `combustivel_valido`, `emissao_valida`, `calcular_subtotal` e `calcular_total` |
+| `api/regras.py` | Regras de negócio puras, usadas pelo schema e pela rota: `ano_valido`, `combustivel_valido`, `emissao_valida`, `calcular_subtotal`, `calcular_total` e `transicao_valida` |
 | `api/models.py` | Models `Usuario`, `Veiculo`, `Oficina`, `CategoriaItem`, `Orcamento` e `ItemOrcamento` (SQLAlchemy): as tabelas descritas em Python, inclusive colunas internas e pessoais |
-| `api/schemas.py` | Schemas Pydantic: entrada (`VeiculoCriar`, `VeiculoAtualizar`, `UsuarioCriar`, `LoginEntrada`, `OrcamentoCriar`, `ItemOrcamentoCriar`) e resposta (`VeiculoResposta`, `UsuarioResposta`, `TokenResposta`, `OrcamentoResposta`, `OrcamentoDetalheResposta`, `ItemOrcamentoResposta`) |
-| `api/main.py` | Rotas e a dependência `usuario_atual` |
+| `api/schemas.py` | Schemas Pydantic: entrada (`VeiculoCriar`, `VeiculoAtualizar`, `UsuarioCriar`, `LoginEntrada`, `OrcamentoCriar`, `ItemOrcamentoCriar`, `OrcamentoStatusAtualizar`) e resposta (`VeiculoResposta`, `UsuarioResposta`, `TokenResposta`, `OrcamentoResposta`, `OrcamentoDetalheResposta`, `ItemOrcamentoResposta`) |
+| `api/main.py` | Rotas, a dependência `usuario_atual` e a busca `buscar_orcamento_do_usuario` |
 
 ```
 banco → model → rota → schema de resposta → JSON
@@ -336,7 +345,8 @@ token → id do usuário → o orçamento existe, é do veículo da URL e o veí
 |---|---|---|
 | `OrcamentoCriar` | corpo do `POST` de orçamento | `id_oficina` > 0; `data_emissao` não pode ser futura; `km` de 0 a 6.000.000; `extra = 'forbid'` |
 | `ItemOrcamentoCriar` | corpo do `POST` de item | `descricao` de 1 a 255 caracteres (sem espaços nas pontas); `quantidade` > 0; `valor_unitario` ≥ 0; ambos até 10 dígitos com 2 decimais, sem infinito nem `NaN`; `extra = 'forbid'` |
-| `OrcamentoResposta` | resposta do `POST` de orçamento | lista branca: sem `criado_em`, `arquivo_url` e `texto_extraido` |
+| `OrcamentoStatusAtualizar` | corpo do `PATCH` de orçamento | só `status`, e só `APROVADO` ou `RECUSADO` (`Literal`); `extra = 'forbid'` |
+| `OrcamentoResposta` | resposta do `POST` e do `PATCH` de orçamento | lista branca: sem `criado_em`, `arquivo_url` e `texto_extraido` |
 | `ItemOrcamentoResposta` | cada item nas respostas | inclui o `subtotal`; sem `id_orcamento` |
 | `OrcamentoDetalheResposta` | resposta do `GET` | o orçamento, mais `itens` e `total` |
 
@@ -421,6 +431,51 @@ Decisões:
 - **`km` menor que o do veículo é permitido,** e a data de emissão não pode ser futura (`emissao_valida`).
 - **Oficinas e categorias são um catálogo compartilhado,** sem dono. O cliente só escolhe por id. A existência é conferida antes de gravar (422 limpo), e o `IntegrityError` no `commit` continua como rede de segurança.
 - **Limites espelham as colunas:** `descricao` até 255, `quantidade` e `valor_unitario` em `numeric(10,2)`, para o erro do cliente virar 422 e não 500.
+- **Busca do dono em um lugar só:** a junção e as três condições ficam na função `buscar_orcamento_do_usuario`, usada por todas as rotas de orçamento. Corrigir ou mudar a regra num lugar vale para todas, e uma rota nova não tem como esquecer uma das condições.
+
+### Aprovar ou recusar orçamento
+
+O orçamento nasce `PENDENTE` e o dono decide uma única vez: `APROVADO` ou `RECUSADO`. Os dois são estados finais.
+
+```
+PENDENTE ──→ APROVADO   (precisa ter pelo menos um item)
+    └──────→ RECUSADO
+```
+
+Exemplo de `PATCH /veiculos/9/orcamentos/15` (com o cabeçalho `Authorization`):
+
+```json
+{"status": "APROVADO"}
+```
+
+Resposta (200):
+
+```json
+{"id": 15, "id_veiculo": 9, "id_oficina": 1, "data_emissao": "2026-10-20", "km": 31000, "status": "APROVADO"}
+```
+
+Respostas observadas:
+
+| Requisição | Status | Resultado |
+|---|---|---|
+| Dono aprova orçamento `PENDENTE` com itens | 200 | `status` `APROVADO`, gravado no banco |
+| Dono recusa orçamento `PENDENTE`, com ou sem itens | 200 | `status` `RECUSADO` |
+| Aprovar o que já está aprovado, ou mudar a decisão (`APROVADO` ↔ `RECUSADO`) | 409 | `Não é possível alterar este orçamento.`; o status não muda |
+| Aprovar orçamento sem itens | 409 | a mesma mensagem; continua `PENDENTE` |
+| Item novo em orçamento aprovado | 409 | a mesma mensagem |
+| `{"status": "PENDENTE"}`, `"PAGO"`, `"aprovado"` (minúsculo) ou `{}` | 422 | erro de validação |
+| `id`, `total` ou `id_veiculo` no corpo | 422 | `extra_forbidden` |
+| Sem token | 401 | `Not authenticated` |
+| Orçamento alheio, veículo alheio, ids que não combinam ou inexistentes | 404 | `Orçamento não encontrado.`, corpo idêntico nos quatro casos; nada muda |
+
+Decisões:
+
+- **Uma rota `PATCH` com o status no corpo,** em vez de `/aprovar` e `/recusar`: um schema e uma rota.
+- **O schema documenta a verdade:** o campo usa `Literal[APROVADO, RECUSADO]`, então o `/docs` mostra só as duas opções aceitas e `PENDENTE` dá 422 antes de chegar à rota.
+- **Regra de transição pura:** `transicao_valida(atual, novo)` em `api/regras.py` só aceita sair de `PENDENTE`. Ela cobre repetir a decisão e reabrir o orçamento numa função só.
+- **404 antes do 409:** a rota primeiro confirma que o orçamento é do usuário. Se a regra de estado viesse antes, um intruso que recebesse 409 num orçamento alheio descobriria que ele existe e até que já foi decidido.
+- **Aprovar exige item:** aprovar total zero não faz sentido. A existência é conferida com `limit(1)`, sem carregar os itens.
+- **Aprovar não cria a manutenção:** a manutenção terá rota própria.
 
 ### Bateria de segurança
 
@@ -495,6 +550,19 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Item em orçamento `RECUSADO` | 409, e nada é gravado |
 | Item novo e `GET` seguinte | o total é recalculado pelo servidor |
 
+**Aprovação de orçamento, com dois usuários** (`testa_aprovar_orcamento.py`):
+
+| Ataque | Resultado |
+|---|---|
+| Aprovar o orçamento de outro usuário com o veículo do dono | 404, e o status não muda |
+| **Aprovar o orçamento do dono com o próprio veículo** (IDOR aninhado) | 404, e o status não muda |
+| Veículo do mesmo dono que não é o do orçamento, ids inexistentes | 404, corpos idênticos aos anteriores |
+| `status` `PENDENTE` (reabrir), `PAGO`, minúsculo, corpo vazio | 422, e o status não muda |
+| `id`, `total` ou `id_veiculo` no corpo | 422 `extra_forbidden` |
+| Aprovar duas vezes, aprovado → recusado, recusado → aprovado | 409, e o status não muda |
+| Aprovar orçamento sem itens | 409, continua `PENDENTE` |
+| Item novo em orçamento aprovado | 409 |
+
 ### Limitações conhecidas
 
 | Limitação | Detalhe | Quando resolver |
@@ -508,7 +576,7 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Arredondamento do banqueiro | os subtotais usam o padrão `ROUND_HALF_EVEN` do Python: `5.005` vira `5.00`. Pode divergir 1 centavo do valor impresso pela oficina. Decisão do autor: manter | revisar |
 | `data_emissao` sem piso | só barra datas futuras; uma data como `0001-01-01` é aceita | revisar |
 | Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça | motor de alertas (S4) |
-| Status do orçamento não muda pela API | não há rota para aprovar ou recusar; um orçamento `APROVADO` ou `RECUSADO` fica fechado para novos itens | aprovação (S5) |
+| Decisões simultâneas | duas aprovações (ou uma aprovação e um item novo) que chegam ao mesmo tempo podem ler `PENDENTE` juntas; falta travar a linha (`with_for_update`) | revisar |
 | Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
 | Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
 | Testes fora do repositório | os scripts de teste ficam só na máquina do autor | S6: virar pytest |
@@ -578,7 +646,7 @@ api/
  ├── config.py       configuração do token (lê JWT_SECRET do .env)
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
  ├── enums.py        enums compartilhados (combustível, grupo, status e tipo de item)
- ├── regras.py       regras de negócio puras (anos, combustível × cilindrada, data de emissão, subtotal e total)
+ ├── regras.py       regras de negócio puras (anos, combustível × cilindrada, data de emissão, subtotal, total e transição de status)
  ├── models.py       models de usuário, veículo, oficina, categoria, orçamento e item (SQLAlchemy), espelho das tabelas
  └── schemas.py      schemas Pydantic de entrada e de resposta
 
@@ -589,7 +657,8 @@ alembic/
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 
-requirements.txt     dependências Python com as versões fixadas
+requirements.txt     dependências da API com as versões fixadas
+requirements_dev.txt dependências de desenvolvimento (ruff, bibliotecas dos testes); inclui o requirements.txt
 .env.example         modelo das variáveis de ambiente (copiar para .env)
 alembic.ini          configuração do Alembic (sem senha)
 ```
@@ -601,7 +670,8 @@ alembic.ini          configuração do Alembic (sem senha)
 - [x] API: CRUD de veículos (consultar, cadastrar, alterar, apagar)
 - [x] API: cadastro de usuário, login (hash argon2 + JWT) e dono do veículo
 - [x] API: orçamentos e itens, com dono pelo veículo e total calculado
-- [ ] Aprovar ou recusar orçamento e histórico de manutenções
+- [x] API: aprovar ou recusar orçamento
+- [ ] Histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
 - [ ] Motor de alertas
 - [ ] Comparador de orçamentos e aprovação
