@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from api.enums import TipoCombustivelEnum
+from api.enums import StatusOrcamentoEnum, TipoCombustivelEnum
 
 
 def emissao_valida(data: date) -> bool:
@@ -33,3 +33,10 @@ def calcular_total(subtotais):
         total_orcamento += item
 
     return total_orcamento
+
+
+def transicao_valida(atual, novo) -> bool:
+
+    return (
+        atual == StatusOrcamentoEnum.PENDENTE and novo != StatusOrcamentoEnum.PENDENTE
+    )

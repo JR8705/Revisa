@@ -16,7 +16,13 @@ from api.models import (
     Usuario,
     Veiculo,
 )
-from api.regras import ano_valido, calcular_subtotal, calcular_total, combustivel_valido
+from api.regras import (
+    ano_valido,
+    calcular_subtotal,
+    calcular_total,
+    combustivel_valido,
+    transicao_valida,
+)
 from api.schemas import (
     ItemOrcamentoCriar,
     ItemOrcamentoResposta,
@@ -24,6 +30,7 @@ from api.schemas import (
     OrcamentoCriar,
     OrcamentoDetalheResposta,
     OrcamentoResposta,
+    OrcamentoStatusAtualizar,
     TokenResposta,
     UsuarioCriar,
     UsuarioResposta,
@@ -309,11 +316,7 @@ def orcamento_criar(
 def buscar_orcamento_do_usuario(
     session: Session, id_veiculo: int, id_orcamento: int, id_usuario: int
 ) -> Orcamento | None:
-    """Devolve o orçamento só se ele for do veículo da URL e o veículo for do usuário.
 
-    Concentra as três condições que fecham o IDOR aninhado. Devolve None quando
-    não encontra (inexistente ou alheio, sem distinguir); a rota decide o 404.
-    """
     return session.scalars(
         select(Orcamento)
         .join(Veiculo)
@@ -421,3 +424,45 @@ def item_criar(
             "valor_unitario": novo_item.valor_unitario,
             "subtotal": subtotal,
         }
+
+
+@app.patch(
+    "/veiculos/{id_veiculo}/orcamentos/{id_orcamento}", response_model=OrcamentoResposta
+)
+def status_alterar(
+    id_veiculo: int,
+    id_orcamento: int,
+    dados_orcamento: OrcamentoStatusAtualizar,
+    id_usuario_validado: IdUsuario,
+):
+
+    with Session(engine) as session:
+        orcamento = buscar_orcamento_do_usuario(
+            session, id_veiculo, id_orcamento, id_usuario_validado
+        )
+
+        if not orcamento:
+            raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
+
+        if not transicao_valida(orcamento.status, dados_orcamento.status):
+            raise HTTPException(
+                status_code=409,
+                detail="Não é possível alterar este orçamento.",
+            )
+        if dados_orcamento.status == StatusOrcamentoEnum.APROVADO:
+            tem_item = session.scalars(
+                select(ItemOrcamento)
+                .where(ItemOrcamento.id_orcamento == orcamento.id)
+                .limit(1)
+            ).first()
+
+            if not tem_item:
+                raise HTTPException(
+                    status_code=409, detail="Não é possível alterar este orçamento."
+                )
+
+        orcamento.status = dados_orcamento.status
+
+        session.commit()
+        session.refresh(orcamento)
+        return orcamento

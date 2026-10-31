@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -135,6 +136,12 @@ class ItemOrcamentoCriar(BaseModel):
     valor_unitario: Decimal = Field(
         ge=0, max_digits=10, decimal_places=2, allow_inf_nan=False
     )
+
+
+class OrcamentoStatusAtualizar(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal[StatusOrcamentoEnum.APROVADO, StatusOrcamentoEnum.RECUSADO]
 
 
 class UsuarioResposta(BaseModel):
