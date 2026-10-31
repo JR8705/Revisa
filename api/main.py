@@ -306,6 +306,25 @@ def orcamento_criar(
         return orcamento
 
 
+def buscar_orcamento_do_usuario(
+    session: Session, id_veiculo: int, id_orcamento: int, id_usuario: int
+) -> Orcamento | None:
+    """Devolve o orçamento só se ele for do veículo da URL e o veículo for do usuário.
+
+    Concentra as três condições que fecham o IDOR aninhado. Devolve None quando
+    não encontra (inexistente ou alheio, sem distinguir); a rota decide o 404.
+    """
+    return session.scalars(
+        select(Orcamento)
+        .join(Veiculo)
+        .where(
+            Orcamento.id == id_orcamento,
+            Orcamento.id_veiculo == id_veiculo,
+            Veiculo.id_usuario == id_usuario,
+        )
+    ).first()
+
+
 @app.get(
     "/veiculos/{id_veiculo}/orcamentos/{id_orcamento}",
     response_model=OrcamentoDetalheResposta,
@@ -316,15 +335,9 @@ def get_orcamento_id(id_veiculo: int, id_orcamento: int, id_usuario: IdUsuario):
         itens = []
         subtotais = []
 
-        orcamento = session.scalars(
-            select(Orcamento)
-            .join(Veiculo)
-            .where(
-                Orcamento.id == id_orcamento,
-                Orcamento.id_veiculo == id_veiculo,
-                Veiculo.id_usuario == id_usuario,
-            )
-        ).first()
+        orcamento = buscar_orcamento_do_usuario(
+            session, id_veiculo, id_orcamento, id_usuario
+        )
 
         if not orcamento:
             raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
@@ -370,15 +383,9 @@ def item_criar(
 ):
 
     with Session(engine) as session:
-        orcamento = session.scalars(
-            select(Orcamento)
-            .join(Veiculo)
-            .where(
-                Orcamento.id == id_orcamento,
-                Orcamento.id_veiculo == id_veiculo,
-                Veiculo.id_usuario == id_usuario,
-            )
-        ).first()
+        orcamento = buscar_orcamento_do_usuario(
+            session, id_veiculo, id_orcamento, id_usuario
+        )
 
         if not orcamento:
             raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
