@@ -94,7 +94,7 @@ class OrcamentoResposta(BaseModel):
 class OrcamentoCriar(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id_oficina: int = Field(gt=0)
+    id_oficina: int = Field(gt=0, le=2147483647)
     data_emissao: date
     km: int = Field(ge=0, le=6000000)
 
@@ -127,7 +127,7 @@ class OrcamentoDetalheResposta(OrcamentoResposta):
 class ItemOrcamentoCriar(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    id_categoria: int = Field(gt=0)
+    id_categoria: int = Field(gt=0, le=2147483647)
     descricao: str = Field(min_length=1, max_length=255)
     tipo: TipoItemEnum
     quantidade: Decimal = Field(

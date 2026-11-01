@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi.exceptions import RequestValidationError
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -8,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from api.database import engine
 from api.enums import StatusOrcamentoEnum
+from api.erros import validacao_sem_input
 from api.models import (
     CategoriaItem,
     ItemOrcamento,
@@ -41,8 +43,10 @@ from api.schemas import (
 from api.seguranca import criar_token, gerar_hash, ler_token, verificar_senha
 
 HASH_FALSO = gerar_hash("qualquer-coisa")
+IdCaminho = Annotated[int, Path(gt=0, le=2147483647)]
 
 app = FastAPI()
+app.add_exception_handler(RequestValidationError, validacao_sem_input)
 esquema_oauth = OAuth2PasswordBearer(tokenUrl="/login")
 
 
@@ -86,7 +90,7 @@ IdUsuario = Annotated[int, Depends(usuario_atual)]
 
 
 @app.get("/veiculos/{id_veiculo}", response_model=VeiculoResposta)
-def get_id_veiculo(id_veiculo: int, id_usuario_validado: IdUsuario):
+def get_id_veiculo(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
 
     with Session(engine) as session:
         veiculo = session.scalars(
@@ -149,7 +153,9 @@ def veiculo_criar(dados_veiculo: VeiculoCriar, id_usuario_validado: IdUsuario):
 
 @app.patch("/veiculos/{id_veiculo}", response_model=VeiculoResposta)
 def veiculo_alterar(
-    id_veiculo: int, dados_veiculo: VeiculoAtualizar, id_usuario_validado: IdUsuario
+    id_veiculo: IdCaminho,
+    dados_veiculo: VeiculoAtualizar,
+    id_usuario_validado: IdUsuario,
 ):
 
     with Session(engine) as session:
@@ -200,7 +206,7 @@ def veiculo_alterar(
 
 
 @app.delete("/veiculos/{id_veiculo}", status_code=204)
-def veiculo_delete(id_veiculo: int, id_usuario_validado: IdUsuario):
+def veiculo_delete(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
 
     with Session(engine) as session:
         veiculo = session.scalars(
@@ -278,7 +284,7 @@ def usuario_login(dados_usuario: LoginEntrada):
     status_code=201,
 )
 def orcamento_criar(
-    dados_orcamento: OrcamentoCriar, id_veiculo: int, id_usuario: IdUsuario
+    dados_orcamento: OrcamentoCriar, id_veiculo: IdCaminho, id_usuario: IdUsuario
 ):
 
     dados = dados_orcamento.model_dump()
@@ -314,10 +320,14 @@ def orcamento_criar(
 
 
 def buscar_orcamento_do_usuario(
-    session: Session, id_veiculo: int, id_orcamento: int, id_usuario: int
+    session: Session,
+    id_veiculo: int,
+    id_orcamento: int,
+    id_usuario: int,
+    travar: bool = False,
 ) -> Orcamento | None:
 
-    return session.scalars(
+    consulta = (
         select(Orcamento)
         .join(Veiculo)
         .where(
@@ -325,14 +335,21 @@ def buscar_orcamento_do_usuario(
             Orcamento.id_veiculo == id_veiculo,
             Veiculo.id_usuario == id_usuario,
         )
-    ).first()
+    )
+
+    if travar:
+        consulta = consulta.with_for_update(of=Orcamento)
+
+    return session.scalars(consulta).first()
 
 
 @app.get(
     "/veiculos/{id_veiculo}/orcamentos/{id_orcamento}",
     response_model=OrcamentoDetalheResposta,
 )
-def get_orcamento_id(id_veiculo: int, id_orcamento: int, id_usuario: IdUsuario):
+def get_orcamento_id(
+    id_veiculo: IdCaminho, id_orcamento: IdCaminho, id_usuario: IdUsuario
+):
 
     with Session(engine) as session:
         itens = []
@@ -379,15 +396,15 @@ def get_orcamento_id(id_veiculo: int, id_orcamento: int, id_usuario: IdUsuario):
     status_code=201,
 )
 def item_criar(
-    id_veiculo: int,
-    id_orcamento: int,
+    id_veiculo: IdCaminho,
+    id_orcamento: IdCaminho,
     item_dados: ItemOrcamentoCriar,
     id_usuario: IdUsuario,
 ):
 
     with Session(engine) as session:
         orcamento = buscar_orcamento_do_usuario(
-            session, id_veiculo, id_orcamento, id_usuario
+            session, id_veiculo, id_orcamento, id_usuario, travar=True
         )
 
         if not orcamento:
@@ -430,15 +447,15 @@ def item_criar(
     "/veiculos/{id_veiculo}/orcamentos/{id_orcamento}", response_model=OrcamentoResposta
 )
 def status_alterar(
-    id_veiculo: int,
-    id_orcamento: int,
+    id_veiculo: IdCaminho,
+    id_orcamento: IdCaminho,
     dados_orcamento: OrcamentoStatusAtualizar,
     id_usuario_validado: IdUsuario,
 ):
 
     with Session(engine) as session:
         orcamento = buscar_orcamento_do_usuario(
-            session, id_veiculo, id_orcamento, id_usuario_validado
+            session, id_veiculo, id_orcamento, id_usuario_validado, travar=True
         )
 
         if not orcamento:
