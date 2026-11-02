@@ -1,8 +1,10 @@
 # Revisa
 
+[![CI](https://github.com/JR8705/Revisa/actions/workflows/ci.yml/badge.svg)](https://github.com/JR8705/Revisa/actions/workflows/ci.yml)
+
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos o registro de orçamentos com itens e total calculado e a aprovação ou recusa do orçamento. Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. Alertas e manutenções ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado e a aprovação ou recusa do orçamento. Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 216 testes automatizados (pytest) rodam no GitHub Actions a cada push. Alertas e manutenções ainda serão criados.
 
 ## O problema
 
@@ -60,9 +62,9 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 | Banco de dados | PostgreSQL |
 | Back-end | Python, FastAPI, SQLAlchemy, Alembic |
 | Segurança | argon2 (hash de senha), PyJWT (token), email-validator |
-| Qualidade | ruff (lint e formatação) |
-| Testes | scripts de teste manuais; pytest planejado |
-| Infraestrutura | Docker, GitHub Actions (planejados) |
+| Qualidade | ruff (lint e formatação), configurado no `pyproject.toml` |
+| Testes | pytest e pytest-cov, contra um PostgreSQL real |
+| Infraestrutura | GitHub Actions (ruff + pytest a cada push); Docker planejado |
 
 ## Como rodar o banco
 
@@ -83,7 +85,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 > Em construção: cadastro, login, CRUD de veículos, orçamentos, itens e aprovação de orçamento estão prontos; alertas e manutenções ainda serão criados.
 
-Pré-requisitos: Python 3.10 ou superior e o banco criado conforme a seção anterior.
+Pré-requisitos: Python 3.11 ou superior (o CI usa o 3.14) e o banco criado conforme a seção anterior.
 
 ```bash
 python -m venv .venv
@@ -92,12 +94,15 @@ source .venv/bin/activate       # Linux e macOS
 pip install -r requirements.txt
 ```
 
-Para desenvolver (ruff e as bibliotecas usadas pelos testes), use `pip install -r requirements_dev.txt`, que já inclui o `requirements.txt`. Antes de cada commit:
+Para desenvolver (ruff, pytest e as bibliotecas dos testes), use `pip install -r requirements_dev.txt`, que já inclui o `requirements.txt`. Antes de cada commit:
 
 ```bash
-ruff check api --fix
-ruff format api
+ruff check . --fix
+ruff format .
+pytest
 ```
+
+As regras do ruff ficam no `pyproject.toml` (as mesmas que o CI usa). Como rodar os testes: ver [Testes automatizados](#testes-automatizados).
 
 A conexão com o banco e o segredo do token são lidos de variáveis de ambiente, nunca escritos no código. Copie o modelo e preencha:
 
@@ -478,11 +483,60 @@ Decisões:
 - **Aprovar não cria a manutenção:** a manutenção terá rota própria.
 - **Trava da linha ao decidir:** o `PATCH` de status e o `POST` de item buscam o orçamento com `with_for_update(of=Orcamento)`. Uma segunda requisição sobre o mesmo orçamento espera a primeira gravar e então lê o estado novo (e recebe 409). O `GET` não trava: leitura não espera ninguém. O `of=` limita a trava à linha do orçamento; sem ele, o `join` travaria também a linha do veículo.
 
+### Testes automatizados
+
+Os testes ficam em `tests/` e usam pytest com o `TestClient` do FastAPI: a API roda dentro do processo do teste e conversa com um PostgreSQL de verdade (nada de banco falso, porque parte do que se testa são regras do próprio banco, como a trava de linha e as chaves estrangeiras).
+
+```bash
+pytest                       # tudo (cerca de 1min30)
+pytest -m "not lento"        # pula a corrida com threads e a medição de tempo do login
+pytest tests/test_aprovacao.py -v
+pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
+```
+
+| Arquivo | O que cobre |
+|---|---|
+| `test_regras.py`, `test_schemas.py` | funções puras e schemas, sem banco |
+| `test_auth.py` | token, login (mensagem e tempo iguais nos dois erros) e 11 formas de token forjado |
+| `test_veiculos.py` | CRUD, dono dos dados (IDOR), injeção, campos gigantes, valores quebrados, 409 ao apagar veículo com orçamento |
+| `test_orcamentos.py` | criar e consultar orçamento, adicionar item, IDOR aninhado |
+| `test_aprovacao.py` | aprovação e o red team (R1 a R8), inclusive a corrida |
+| `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
+
+Como os testes foram montados:
+
+- **Trava do banco.** O `tests/conftest.py` aborta antes do primeiro teste se o `DATABASE_URL` não apontar para `bdrevisa_teste`. Um `.env` esquecido apontando para o banco de desenvolvimento não é apagado por engano.
+- **Cada teste cria e apaga os próprios dados.** A fixture `fabrica` cadastra usuários (e-mail aleatório), veículos, orçamentos e itens **pela API** e apaga tudo no fim, mesmo quando o teste falha. Não se usa rollback por transação porque as rotas abrem a própria `Session`, e o teste de corrida precisa de `commit` de verdade para a trava funcionar.
+- **Lixo é falha.** Uma fixture da sessão conta usuários, veículos, orçamentos e itens antes e depois de tudo; se sobrar uma linha, o pytest acusa.
+- **Sem credencial no código.** Os usuários do seed não têm senha (hash inválido de propósito). A fixture `login_seed` grava uma senha aleatória (`secrets.token_urlsafe`) só durante o teste e devolve o hash original no fim.
+- **O teste confere o efeito, não só o status.** Depois de um 404 ou 422, o teste confirma no banco que nada mudou (status do orçamento, contagem de itens, dono do veículo). Os 404 de "é de outro" e "não existe" são comparados pelo texto da resposta.
+- **Testes com a marca `lento`:** a corrida aprovar × recusar (15 rodadas com `threading.Barrier`) e a medição de tempo do login. Rodam no CI; localmente dá para pular.
+
+Para conferir que os testes pegam o defeito, duas mutações foram feitas na `api/` e desfeitas: tirar o `travar=True` do `PATCH` derruba o teste de corrida (`[200, 200]`), e tirar o filtro do dono da `buscar_orcamento_do_usuario` derruba os três testes de 404 idênticos.
+
+**Banco de testes local.** Para ficar igual ao do CI, recrie o `bdrevisa_teste` a partir dos arquivos do repositório:
+
+```bash
+dropdb bdrevisa_teste
+createdb bdrevisa_teste
+psql -d bdrevisa_teste -f database/schema.sql
+psql -d bdrevisa_teste -f database/seed.sql
+```
+
+**CI (`.github/workflows/ci.yml`).** A cada push e pull request, o GitHub Actions roda dois jobs:
+
+| Job | O que faz |
+|---|---|
+| `lint` | `ruff check` e `ruff format --check` |
+| `test` | sobe um PostgreSQL 16 limpo como serviço, carrega `schema.sql` + `seed.sql`, gera um `JWT_SECRET` descartável (`openssl rand -hex 32`) e roda `pytest` com relatório de cobertura |
+
+Cuidados de segurança do workflow: `permissions: contents: read` (o token do job só lê o repositório); gatilho `pull_request`, nunca `pull_request_target` (este roda código de fork com acesso aos segredos do repositório); nenhum segredo real cadastrado no GitHub (a senha do banco do CI só existe dentro do contêiner descartável); dependências com versão fixada no `requirements_dev.txt`, então o CI instala exatamente o que foi testado.
+
 ### Bateria de segurança
 
-Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos passaram.
+Todos os casos abaixo nasceram como scripts manuais e hoje são testes do pytest em `tests/`, rodados no CI a cada push.
 
-**CRUD de veículos** (`exercicios/testa_schema.py --api`, já autenticado):
+**CRUD de veículos** (`test_veiculos.py` e `test_schemas.py`):
 
 | Ataque | Resultado |
 |---|---|
@@ -497,12 +551,13 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | S5: `km_atual = 99999999999` | 422 `less_than_equal` |
 | S6: respostas de `POST` e `PATCH` | sem `placa`, `id_usuario` e `criado_em` |
 
-**Login e token** (`testa_login.py` e a `usuario_atual`):
+**Login e token** (`test_auth.py`):
 
 | Ataque | Resultado |
 |---|---|
-| Senha errada × e-mail inexistente | 401 com a mesma mensagem; tempo médio 0,063 s × 0,060 s |
-| Usuário do seed (hash inválido no banco) | 401, nunca 500 |
+| Senha errada × e-mail inexistente | 401 com a mesma mensagem; tempo parecido (medido em 19/10: 0,063 s × 0,060 s; o teste exige diferença menor que 0,08 s na mediana) |
+| Usuário com hash inválido no banco (como os do seed) | 401, nunca 500 |
+| Cadastro com e-mail repetido (em maiúsculas) | 409 |
 | Senha de 129 caracteres, campo extra | 422 |
 | Sem token, texto qualquer no lugar do token | 401 |
 | Token com um caractere trocado (adulterado) | 401 |
@@ -513,7 +568,7 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Token com `sub` que não é número | 401 (não 500) |
 | Token válido de usuário apagado | 401 |
 
-**Posse dos dados, com dois usuários** (`testa_posse.py`):
+**Posse dos dados, com dois usuários** (`test_veiculos.py`):
 
 | Ataque | Resultado |
 |---|---|
@@ -525,9 +580,9 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Outro usuário apaga | 404, e o veículo continua existindo |
 | `PATCH` e `DELETE` sem token | 401 |
 
-**Com os dados do seed** (`testa_seed.py`, usuários de exemplo com senha local): os três usuários logam; só o dono vê o veículo 1; o dono recebe 409 ao apagar (tem orçamentos); os outros dois recebem 404.
+**Com os dados do seed** (`test_seed.py`, senha aleatória só durante o teste): só o dono vê o veículo 1; o dono recebe 409 ao apagar (tem orçamentos); os outros dois recebem 404. O 409 também é testado com um veículo e um orçamento criados pelo próprio teste.
 
-**Orçamentos e itens, com dois usuários** (`testa_orcamento.py`, `testa_orcamento_get.py` e `testa_item_criar.py`):
+**Orçamentos e itens, com dois usuários** (`test_orcamentos.py`):
 
 | Ataque | Resultado |
 |---|---|
@@ -551,7 +606,7 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Item em orçamento `RECUSADO` | 409, e nada é gravado |
 | Item novo e `GET` seguinte | o total é recalculado pelo servidor |
 
-**Aprovação de orçamento, com dois usuários** (`testa_aprovar_orcamento.py`):
+**Aprovação de orçamento, com dois usuários** (`test_aprovacao.py`):
 
 | Ataque | Resultado |
 |---|---|
@@ -564,7 +619,7 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Aprovar orçamento sem itens | 409, continua `PENDENTE` |
 | Item novo em orçamento aprovado | 409 |
 
-**Red team da aprovação** (`testa_redteam_aprovacao.py`, 1/11/2026). Depois que a rota passou nos testes de comportamento, a pergunta foi "como alguém quebraria isso?". Oito ataques; três acharam defeitos reais, corrigidos e testados de novo:
+**Red team da aprovação** (1/11/2026, hoje em `test_aprovacao.py`). Depois que a rota passou nos testes de comportamento, a pergunta foi "como alguém quebraria isso?". Oito ataques; três acharam defeitos reais, corrigidos e testados de novo:
 
 | # | Ataque | Antes | Depois |
 |---|---|---|---|
@@ -583,7 +638,7 @@ Os achados e as correções:
 - **R4, o 500 dos ids gigantes:** o SQLAlchemy envia o id como `%(id_1)s::INTEGER` e o PostgreSQL recusa com `integer out of range` (todas as colunas `id` são `INTEGER`). O cliente só via um 500 genérico, mas qualquer um podia gerar erro à vontade e encher o log com a consulta. Correção: `IdCaminho = Annotated[int, Path(gt=0, le=2147483647)]` em todas as rotas e `le=2147483647` em `id_oficina` e `id_categoria`. A validação acontece antes do banco. O id `1.0` continua dando 404: o Pydantic converte `"1.0"` em `1`, e o filtro do dono barra.
 - **R7, a corrida (TOCTOU, *time of check to time of use*):** as duas requisições liam `PENDENTE`, passavam pela `transicao_valida` e gravavam; as duas recebiam 200 e valia a última. A versão mais grave é aprovar enquanto um item entra: o item podia cair num orçamento já aprovado. Correção: a trava da linha descrita acima, nas duas rotas que mudam o orçamento.
 
-Saída final (máquina do autor): 54 checagens, todas OK; as baterias anteriores continuaram passando.
+Saída final do script original (máquina do autor): 54 checagens, todas OK. Na migração para o pytest, o R7 passou a exigir, em cada rodada, exatamente um 200 e um 409.
 
 ### Limitações conhecidas
 
@@ -599,7 +654,6 @@ Saída final (máquina do autor): 54 checagens, todas OK; as baterias anteriores
 | Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça | motor de alertas (S4) |
 | Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
 | Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
-| Testes fora do repositório | os scripts de teste ficam só na máquina do autor | S6: virar pytest |
 
 ### Laboratório de SQL Injection
 
@@ -675,11 +729,20 @@ alembic/
  ├── env.py          configuração: lê a DATABASE_URL e o model
  └── versions/       migrações, em ordem
 
+tests/
+ ├── conftest.py     trava do banco, client, fábrica de dados e limpeza
+ ├── apoio.py        constantes e funções comuns (tokens forjados, consultas ao banco)
+ └── test_*.py       testes por assunto (ver Testes automatizados)
+
+.github/workflows/
+ └── ci.yml          GitHub Actions: ruff + pytest com PostgreSQL de serviço
+
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 
 requirements.txt     dependências da API com as versões fixadas
-requirements_dev.txt dependências de desenvolvimento (ruff, bibliotecas dos testes); inclui o requirements.txt
+requirements_dev.txt dependências de desenvolvimento (ruff, pytest, cliente HTTP dos testes); inclui o requirements.txt
+pyproject.toml       configuração do pytest, da cobertura e do ruff
 .env.example         modelo das variáveis de ambiente (copiar para .env)
 alembic.ini          configuração do Alembic (sem senha)
 ```
@@ -696,7 +759,8 @@ alembic.ini          configuração do Alembic (sem senha)
 - [ ] Upload do orçamento e extração automática dos itens
 - [ ] Motor de alertas
 - [ ] Comparador de orçamentos e aprovação
-- [ ] Testes automatizados, CI e deploy
+- [x] Testes automatizados (pytest) e CI (GitHub Actions)
+- [ ] Deploy
 
 ## Autor
 
