@@ -1,0 +1,19 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers"
+markers = ["lento: testes demorados (corrida com threads, medição de tempo)"]
+
+[tool.coverage.run]
+source = ["api"]
+
+[tool.ruff]
+target-version = "py313"
+extend-exclude = ["alembic", "exercicios"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501", "B008", "UP042"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "apoio"]

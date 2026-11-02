@@ -218,3 +218,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Scripts de teste antigos, substituídos por tests/
+exercicios/testa_*.py
+exercicios/seed_senhas.py
