@@ -476,6 +476,7 @@ Decisões:
 - **404 antes do 409:** a rota primeiro confirma que o orçamento é do usuário. Se a regra de estado viesse antes, um intruso que recebesse 409 num orçamento alheio descobriria que ele existe e até que já foi decidido.
 - **Aprovar exige item:** aprovar total zero não faz sentido. A existência é conferida com `limit(1)`, sem carregar os itens.
 - **Aprovar não cria a manutenção:** a manutenção terá rota própria.
+- **Trava da linha ao decidir:** o `PATCH` de status e o `POST` de item buscam o orçamento com `with_for_update(of=Orcamento)`. Uma segunda requisição sobre o mesmo orçamento espera a primeira gravar e então lê o estado novo (e recebe 409). O `GET` não trava: leitura não espera ninguém. O `of=` limita a trava à linha do orçamento; sem ele, o `join` travaria também a linha do veículo.
 
 ### Bateria de segurança
 
@@ -563,6 +564,27 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Aprovar orçamento sem itens | 409, continua `PENDENTE` |
 | Item novo em orçamento aprovado | 409 |
 
+**Red team da aprovação** (`testa_redteam_aprovacao.py`, 1/11/2026). Depois que a rota passou nos testes de comportamento, a pergunta foi "como alguém quebraria isso?". Oito ataques; três acharam defeitos reais, corrigidos e testados de novo:
+
+| # | Ataque | Antes | Depois |
+|---|---|---|---|
+| R1 | Oráculo de estado: o intruso tenta aprovar orçamento alheio já aprovado, já recusado ou sem itens (com o veículo do dono e com o próprio) | 404 idêntico ao inexistente | — |
+| R2 | `status` com `null`, número, lista, objeto, espaços, `Aprovado`, A cirílico, byte nulo, nome do membro do enum, 100 mil caracteres; corpo como texto, lista, formulário ou na query | 422 | — |
+| R3 | `{"status": Infinity}` (e `NaN`, `-Infinity`) cru no JSON | **500** | 422 |
+| R4 | Ids adulterados: `0`, `-1`, `1e3`, `0x1`, `1 OR 1=1`, `2**31`, `2**63`, 30 dígitos, no caminho e no corpo (`id_oficina`, `id_categoria`) | **500** acima de 2.147.483.647 | 422 |
+| R5 | `PUT`, `POST` e `DELETE` na URL do `PATCH` | 405 | — |
+| R6 | Token forjado com o id do dono: sem `Bearer`, chave errada, `alg: none`, sem `exp`, expirado, assinatura cortada, usuário apagado | 401 | — |
+| R7 | Corrida: aprovar e recusar o mesmo orçamento ao mesmo tempo (15 rodadas, as duas requisições largam juntas com `threading.Barrier`) | **duas decisões aceitas em 9 a 13 das 15 rodadas** | 0 de 15 |
+| R8 | Colunas internas na resposta do `PATCH` | só os 6 campos do schema | — |
+
+Os achados e as correções:
+
+- **R3, o 500 do `Infinity`:** o Python aceita `Infinity` ao ler o JSON (vira `float('inf')`), o schema recusa, e o erro estourava ao montar a resposta 422, que devolvia o valor recebido (`inf` não existe em JSON). Correção: `api/erros.py` registra um handler de `RequestValidationError` que monta o 422 sem o campo `input`. De quebra, a API deixou de devolver ao cliente o que ele mandou (os 100 mil caracteres do R2, por exemplo). Vale para todas as rotas.
+- **R4, o 500 dos ids gigantes:** o SQLAlchemy envia o id como `%(id_1)s::INTEGER` e o PostgreSQL recusa com `integer out of range` (todas as colunas `id` são `INTEGER`). O cliente só via um 500 genérico, mas qualquer um podia gerar erro à vontade e encher o log com a consulta. Correção: `IdCaminho = Annotated[int, Path(gt=0, le=2147483647)]` em todas as rotas e `le=2147483647` em `id_oficina` e `id_categoria`. A validação acontece antes do banco. O id `1.0` continua dando 404: o Pydantic converte `"1.0"` em `1`, e o filtro do dono barra.
+- **R7, a corrida (TOCTOU, *time of check to time of use*):** as duas requisições liam `PENDENTE`, passavam pela `transicao_valida` e gravavam; as duas recebiam 200 e valia a última. A versão mais grave é aprovar enquanto um item entra: o item podia cair num orçamento já aprovado. Correção: a trava da linha descrita acima, nas duas rotas que mudam o orçamento.
+
+Saída final (máquina do autor): 54 checagens, todas OK; as baterias anteriores continuaram passando.
+
 ### Limitações conhecidas
 
 | Limitação | Detalhe | Quando resolver |
@@ -570,13 +592,11 @@ Rodada em banco de testes (`bdrevisa_teste`), com a API no ar. Todos os casos pa
 | Sem limite de tentativas | login e cadastro aceitam tentativas ilimitadas (força bruta e teste de e-mails existentes) | S6 |
 | Token sem revogação | o token vale até expirar (30 min); não há logout nem refresh token. Usuário apagado é barrado na hora | futuro |
 | Senha só com espaços | uma senha de 8 espaços é aceita | revisar |
-| JSON com `Infinity` cru | corpo com a palavra `Infinity` (JSON inválido) devolve 500 em vez de 422: o erro estoura ao montar a própria resposta 422, que tenta devolver o valor recebido | investigar |
 | `print(e)` nos erros do banco | em produção deve ser log (e o `print` mostraria parâmetros da consulta) | S6 (`logging`) |
 | Mensagem do 409 do cadastro e do DELETE | supõem a causa sem checar | revisar quando outras tabelas apontarem para `veiculos` |
 | Arredondamento do banqueiro | os subtotais usam o padrão `ROUND_HALF_EVEN` do Python: `5.005` vira `5.00`. Pode divergir 1 centavo do valor impresso pela oficina. Decisão do autor: manter | revisar |
 | `data_emissao` sem piso | só barra datas futuras; uma data como `0001-01-01` é aceita | revisar |
 | Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça | motor de alertas (S4) |
-| Decisões simultâneas | duas aprovações (ou uma aprovação e um item novo) que chegam ao mesmo tempo podem ler `PENDENTE` juntas; falta travar a linha (`with_for_update`) | revisar |
 | Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
 | Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
 | Testes fora do repositório | os scripts de teste ficam só na máquina do autor | S6: virar pytest |
@@ -642,6 +662,7 @@ database/
 
 api/
  ├── main.py         aplicação FastAPI, rotas e a dependência usuario_atual
+ ├── erros.py        resposta 422 sem ecoar o valor recebido
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
  ├── config.py       configuração do token (lê JWT_SECRET do .env)
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
