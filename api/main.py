@@ -72,7 +72,7 @@ def usuario_atual(token: str = Depends(esquema_oauth)):
             status_code=401,
             detail="Token inválido.",
             headers={"WWW-Authenticate": "Bearer"},
-        )
+        ) from None
 
     with Session(engine) as session:
         usuario = session.get(Usuario, id_usuario)
@@ -145,7 +145,9 @@ def veiculo_criar(dados_veiculo: VeiculoCriar, id_usuario_validado: IdUsuario):
         except IntegrityError:
             session.rollback()
             # print(e)  TODO S6: usar logging
-            raise HTTPException(status_code=422, detail="Dados recusados pelo banco.")
+            raise HTTPException(
+                status_code=422, detail="Dados recusados pelo banco."
+            ) from None
 
         session.refresh(veiculo_novo)
         return veiculo_novo
@@ -199,7 +201,9 @@ def veiculo_alterar(
         except IntegrityError:
             session.rollback()
             # print(e) TODO S6: usar logging
-            raise HTTPException(status_code=422, detail="Dados recusados pelo banco.")
+            raise HTTPException(
+                status_code=422, detail="Dados recusados pelo banco."
+            ) from None
 
         session.refresh(veiculo_existente)
         return veiculo_existente
@@ -229,7 +233,7 @@ def veiculo_delete(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
             raise HTTPException(
                 status_code=409,
                 detail="Veículo possui orçamentos vinculados. Não é possível apagar o veículo.",
-            )
+            ) from None
 
 
 @app.post("/usuarios", response_model=UsuarioResposta, status_code=201)
@@ -251,7 +255,9 @@ def usuario_criar(dados_usuario: UsuarioCriar):
         except IntegrityError:
             session.rollback()
             # print(e) TODO S6: usar logging
-            raise HTTPException(status_code=409, detail="E-mail já cadastrado.")
+            raise HTTPException(
+                status_code=409, detail="E-mail já cadastrado."
+            ) from None
 
         session.refresh(usuario_novo)
         return usuario_novo
@@ -313,7 +319,7 @@ def orcamento_criar(
         except IntegrityError:
             session.rollback()
             # print(e) TODO S6: usar logging
-            raise HTTPException(status_code=422, detail="Oficina inválida.")
+            raise HTTPException(status_code=422, detail="Oficina inválida.") from None
 
         session.refresh(orcamento)
         return orcamento
@@ -428,7 +434,9 @@ def item_criar(
             session.refresh(novo_item)
         except IntegrityError:
             session.rollback()
-            raise HTTPException(status_code=422, detail="Dados do item inválidos.")
+            raise HTTPException(
+                status_code=422, detail="Dados do item inválidos."
+            ) from None
 
         subtotal = calcular_subtotal(novo_item.quantidade, novo_item.valor_unitario)
 

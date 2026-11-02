@@ -1,6 +1,6 @@
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -47,7 +47,7 @@ class VeiculoCriar(BaseModel):
     km_atual: int = Field(default=0, ge=0, le=6000000)
 
     @model_validator(mode="after")
-    def verificar_anos(self) -> "VeiculoCriar":
+    def verificar_anos(self) -> Self:
 
         if not ano_valido(self.ano_fabricacao, self.ano_modelo):
             raise ValueError(
@@ -56,7 +56,7 @@ class VeiculoCriar(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def verificar_cilindrada(self) -> "VeiculoCriar":
+    def verificar_cilindrada(self) -> Self:
 
         if not combustivel_valido(self.combustivel, self.cilindrada):
             raise ValueError("Veículo elétrico não tem cilindrada.")
