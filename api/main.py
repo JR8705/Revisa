@@ -349,6 +349,34 @@ def buscar_orcamento_do_usuario(
     return session.scalars(consulta).first()
 
 
+def item_resposta(item: ItemOrcamento) -> dict:
+
+    return {
+        "id": item.id,
+        "id_categoria": item.id_categoria,
+        "descricao": item.descricao,
+        "tipo": item.tipo,
+        "quantidade": item.quantidade,
+        "valor_unitario": item.valor_unitario,
+        "subtotal": calcular_subtotal(item.quantidade, item.valor_unitario),
+    }
+
+
+def montar_itens(session: Session, orcamento: Orcamento) -> list[dict]:
+
+    itens_orcamento = session.scalars(
+        select(ItemOrcamento)
+        .where(ItemOrcamento.id_orcamento == orcamento.id)
+        .order_by(ItemOrcamento.id)
+    ).all()
+
+    itens = []
+    for item in itens_orcamento:
+        itens.append(item_resposta(item))
+
+    return itens
+
+
 @app.get(
     "/veiculos/{id_veiculo}/orcamentos/{id_orcamento}",
     response_model=OrcamentoDetalheResposta,
@@ -358,9 +386,6 @@ def get_orcamento_id(
 ):
 
     with Session(engine) as session:
-        itens = []
-        subtotais = []
-
         orcamento = buscar_orcamento_do_usuario(
             session, id_veiculo, id_orcamento, id_usuario
         )
@@ -368,26 +393,11 @@ def get_orcamento_id(
         if not orcamento:
             raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
 
-        itens_orcamento = session.scalars(
-            select(ItemOrcamento)
-            .where(ItemOrcamento.id_orcamento == orcamento.id)
-            .order_by(ItemOrcamento.id)
-        ).all()
+        itens = montar_itens(session, orcamento)
 
-        for item in itens_orcamento:
-            subtotal = calcular_subtotal(item.quantidade, item.valor_unitario)
-            subtotais.append(subtotal)
-            itens.append(
-                {
-                    "id": item.id,
-                    "id_categoria": item.id_categoria,
-                    "descricao": item.descricao,
-                    "tipo": item.tipo,
-                    "quantidade": item.quantidade,
-                    "valor_unitario": item.valor_unitario,
-                    "subtotal": subtotal,
-                }
-            )
+        subtotais = []
+        for item in itens:
+            subtotais.append(item["subtotal"])
 
         return {
             **OrcamentoResposta.model_validate(orcamento).model_dump(),
@@ -438,17 +448,7 @@ def item_criar(
                 status_code=422, detail="Dados do item inválidos."
             ) from None
 
-        subtotal = calcular_subtotal(novo_item.quantidade, novo_item.valor_unitario)
-
-        return {
-            "id": novo_item.id,
-            "id_categoria": novo_item.id_categoria,
-            "descricao": novo_item.descricao,
-            "tipo": novo_item.tipo,
-            "quantidade": novo_item.quantidade,
-            "valor_unitario": novo_item.valor_unitario,
-            "subtotal": subtotal,
-        }
+        return item_resposta(novo_item)
 
 
 @app.patch(
