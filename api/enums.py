@@ -31,3 +31,19 @@ class StatusOrcamentoEnum(str, enum.Enum):
 class TipoItemEnum(str, enum.Enum):
     PECA = "PECA"
     MAO_OBRA = "MAO_OBRA"
+
+
+class TipoAlertaEnum(str, enum.Enum):
+    TROCA_RECENTE = "TROCA_RECENTE"
+    PRECO_ACIMA_MEDIA = "PRECO_ACIMA_MEDIA"
+    MAO_OBRA_ALTA = "MAO_OBRA_ALTA"
+    ITEM_DUPLICADO = "ITEM_DUPLICADO"
+    ITEM_GENERICO = "ITEM_GENERICO"
+    CONSUMIVEL_CARO = "CONSUMIVEL_CARO"
+    VALOR_ZERADO = "VALOR_ZERADO"
+
+
+class SeveridadeAlertaEnum(str, enum.Enum):
+    ALTA = "ALTA"
+    MEDIA = "MEDIA"
+    BAIXA = "BAIXA"
