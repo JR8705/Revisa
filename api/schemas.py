@@ -11,7 +11,13 @@ from pydantic import (
     model_validator,
 )
 
-from api.enums import StatusOrcamentoEnum, TipoCombustivelEnum, TipoItemEnum
+from api.enums import (
+    SeveridadeAlertaEnum,
+    StatusOrcamentoEnum,
+    TipoAlertaEnum,
+    TipoCombustivelEnum,
+    TipoItemEnum,
+)
 from api.regras import ano_valido, combustivel_valido, emissao_valida
 
 
@@ -170,3 +176,10 @@ class LoginEntrada(BaseModel):
 class TokenResposta(BaseModel):
     access_token: str
     token_type: str = Field(default="bearer")
+
+
+class AlertaResposta(BaseModel):
+    tipo: TipoAlertaEnum
+    severidade: SeveridadeAlertaEnum
+    id_item: int | None
+    mensagem: str

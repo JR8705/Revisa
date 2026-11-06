@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from api.alertas import gerar_alertas
 from api.database import engine
 from api.enums import StatusOrcamentoEnum
 from api.erros import validacao_sem_input
@@ -26,6 +27,7 @@ from api.regras import (
     transicao_valida,
 )
 from api.schemas import (
+    AlertaResposta,
     ItemOrcamentoCriar,
     ItemOrcamentoResposta,
     LoginEntrada,
@@ -491,3 +493,26 @@ def status_alterar(
         session.commit()
         session.refresh(orcamento)
         return orcamento
+
+
+@app.get(
+    "/veiculos/{id_veiculo}/orcamentos/{id_orcamento}/alertas",
+    response_model=list[AlertaResposta],
+)
+def get_alertas(
+    id_veiculo: IdCaminho,
+    id_orcamento: IdCaminho,
+    id_usuario_validado: IdUsuario,
+):
+
+    with Session(engine) as session:
+        orcamento = buscar_orcamento_do_usuario(
+            session, id_veiculo, id_orcamento, id_usuario_validado
+        )
+
+        if not orcamento:
+            raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
+
+        itens = montar_itens(session, orcamento)
+
+        return gerar_alertas(itens)
