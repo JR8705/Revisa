@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado e a aprovação ou recusa do orçamento. Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 216 testes automatizados (pytest) rodam no GitHub Actions a cada push. Alertas e manutenções ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os primeiros alertas automáticos (mão de obra alta, item duplicado e valor zerado). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 301 testes automatizados (pytest) rodam no GitHub Actions a cada push. Os alertas que dependem do histórico e dos preços de referência e as manutenções ainda serão criados.
 
 ## O problema
 
@@ -28,6 +28,8 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 | `ITEM_GENERICO` | Descrição vaga, sem discriminação do que será feito |
 | `CONSUMIVEL_CARO` | Consumíveis (estopa, graxa, etc.) acima do esperado |
 | `VALOR_ZERADO` | Item sem valor, que pode virar cobrança depois |
+
+Já funcionam: `MAO_OBRA_ALTA`, `ITEM_DUPLICADO` e `VALOR_ZERADO` (ver [Alertas do orçamento](#alertas-do-orçamento)). `TROCA_RECENTE` e `PRECO_ACIMA_MEDIA` são a próxima etapa; `ITEM_GENERICO` e `CONSUMIVEL_CARO` vêm depois.
 
 ## Modelo de dados
 
@@ -83,7 +85,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: cadastro, login, CRUD de veículos, orçamentos, itens e aprovação de orçamento estão prontos; alertas e manutenções ainda serão criados.
+> Em construção: cadastro, login, CRUD de veículos, orçamentos, itens, aprovação de orçamento e os alertas calculados só a partir dos itens estão prontos; os alertas com histórico e preço de referência e as manutenções ainda serão criados.
 
 Pré-requisitos: Python 3.11 ou superior (o CI usa o 3.14) e o banco criado conforme a seção anterior.
 
@@ -170,6 +172,7 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 | `GET /veiculos/{veiculo_id}/orcamentos/{orcamento_id}` | **token** | Devolve o orçamento com os itens, o subtotal de cada um e o total (200) |
 | `POST /veiculos/{veiculo_id}/orcamentos/{orcamento_id}/itens` | **token** | Acrescenta um item a um orçamento `PENDENTE` (201); 409 se o orçamento não estiver pendente |
 | `PATCH /veiculos/{veiculo_id}/orcamentos/{orcamento_id}` | **token** | Aprova ou recusa um orçamento `PENDENTE` (200); 409 se já tiver sido decidido ou se for aprovação sem itens |
+| `GET /veiculos/{veiculo_id}/orcamentos/{orcamento_id}/alertas` | **token** | Lista os alertas do orçamento, calculados na hora (200; lista vazia se não houver) |
 
 O token vai no cabeçalho `Authorization: Bearer <token>`. No `/docs`, o botão **Authorize** faz isso.
 
@@ -483,6 +486,56 @@ Decisões:
 - **Aprovar não cria a manutenção:** a manutenção terá rota própria.
 - **Trava da linha ao decidir:** o `PATCH` de status e o `POST` de item buscam o orçamento com `with_for_update(of=Orcamento)`. Uma segunda requisição sobre o mesmo orçamento espera a primeira gravar e então lê o estado novo (e recebe 409). O `GET` não trava: leitura não espera ninguém. O `of=` limita a trava à linha do orçamento; sem ele, o `join` travaria também a linha do veículo.
 
+### Alertas do orçamento
+
+Os alertas apontam o que merece atenção antes de aprovar. São **calculados a cada consulta**, a partir dos itens atuais do orçamento, e não ficam gravados: enquanto o orçamento está `PENDENTE` os itens mudam, e um alerta gravado ficaria velho.
+
+```
+GET .../alertas → buscar_orcamento_do_usuario (dono no WHERE) → montar_itens → gerar_alertas → lista ordenada
+```
+
+A rota só busca os dados. Quem decide são funções puras em `api/alertas.py`, que recebem a lista de itens (a mesma que o `GET` do orçamento mostra, montada por `montar_itens`) e não tocam no banco.
+
+| Alerta | Regra | Severidade | Aponta para |
+|---|---|---|---|
+| `MAO_OBRA_ALTA` | soma dos itens `MAO_OBRA` (diagnóstico incluído) **maior que** 50% do total (`LIMITE_MAO_OBRA`) | `MEDIA` | o orçamento (`id_item` nulo) |
+| `ITEM_DUPLICADO` | mesma descrição depois de `normalizar_descricao`: sem acentos, espaços, pontuação e maiúsculas (`Bomba d'água`, `BOMBA DAGUA` e `bomba-d agua` viram `bombadagua`) | `ALTA` | a **segunda** ocorrência em diante |
+| `VALOR_ZERADO` | `valor_unitario` igual a zero | `ALTA` | o item |
+
+A lista sai ordenada por severidade (`ALTA`, `MEDIA`, `BAIXA`) e, dentro dela, pelo `id_item`, com o alerta do orçamento inteiro por último.
+
+Resposta de `GET /veiculos/2/orcamentos/5/alertas` (orçamento 5 do seed: óleo, filtro e mão de obra de R$ 350):
+
+```json
+[{"tipo": "MAO_OBRA_ALTA", "severidade": "MEDIA", "id_item": null, "mensagem": "Mão de obra representa 51.09% do total (limite de 50%)."}]
+```
+
+Respostas observadas:
+
+| Requisição | Status | Resultado |
+|---|---|---|
+| Orçamento 3 do seed (bomba d'água lançada duas vezes) | 200 | `ITEM_DUPLICADO` no item 12 |
+| Orçamento sem itens, ou sem nada a apontar | 200 | `[]` |
+| Todos os itens com valor zero | 200 | um `VALOR_ZERADO` por item, sem divisão por zero |
+| Orçamento já `APROVADO` ou `RECUSADO` | 200 | os alertas continuam (servem de histórico) |
+| Sem token ou com token forjado | 401 | — |
+| Orçamento alheio, veículo alheio, ids que não combinam ou inexistentes | 404 | `Orçamento não encontrado.`, corpo idêntico |
+| Id `0`, `abc`, `1 OR 1=1` ou acima de 2.147.483.647 | 422 | — |
+| `POST`, `PUT`, `PATCH` ou `DELETE` na rota | 405 | — |
+
+Decisões:
+
+- **Duplicado pela descrição, não pela categoria:** pela categoria, amortecedor dianteiro e traseiro (trocar os dois é normal) virariam alerta. Preço diferente não esconde a repetição.
+- **Limite estrito:** exatamente 50% não alerta.
+- **Severidades** seguem o `seed.sql`: cobrança em dobro e item sem valor são `ALTA`; mão de obra alta pode ter explicação (serviço difícil com peça barata) e é `MEDIA`.
+- **Sem trava:** a rota só lê. Travar a linha faria a aprovação e a inclusão de itens esperarem cada consulta, sem impedir nenhuma corrida.
+
+Segurança:
+
+- **O dono continua no `WHERE`** (`buscar_orcamento_do_usuario`): o intruso recebe o mesmo 404 de um orçamento inexistente, sem saber se há alertas.
+- **Consultas internas também filtram:** os próximos alertas (`TROCA_RECENTE`) vão ler orçamentos anteriores. A consulta filtra pelo veículo do orçamento já validado (`orcamento.id_veiculo`, nunca o id da URL). Filtrar só pela categoria traria trocas de outros usuários, e a mensagem do alerta vazaria data, km e número do orçamento alheio (um IDOR por um caminho lateral).
+- **XSS na mensagem:** a mensagem repete a descrição digitada, e na S3 a descrição virá do PDF da oficina. A API devolve JSON e guarda o texto original; quem mostrar a mensagem numa tela precisa escapar o texto na saída (o React faz isso por padrão; o risco é usar `innerHTML` ou `dangerouslySetInnerHTML`), para que um `<script>` gravado na descrição não rode no navegador de quem abre o orçamento (XSS armazenado).
+
 ### Testes automatizados
 
 Os testes ficam em `tests/` e usam pytest com o `TestClient` do FastAPI: a API roda dentro do processo do teste e conversa com um PostgreSQL de verdade (nada de banco falso, porque parte do que se testa são regras do próprio banco, como a trava de linha e as chaves estrangeiras).
@@ -501,6 +554,9 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_veiculos.py` | CRUD, dono dos dados (IDOR), injeção, campos gigantes, valores quebrados, 409 ao apagar veículo com orçamento |
 | `test_orcamentos.py` | criar e consultar orçamento, adicionar item, IDOR aninhado |
 | `test_aprovacao.py` | aprovação e o red team (R1 a R8), inclusive a corrida |
+| `test_alertas.py` | regras puras dos alertas: normalização da descrição, limite da mão de obra, duplicados, ordem e os orçamentos 3, 5 e 11 do seed |
+| `test_alertas_api.py` | a rota de alertas: resposta, seed, ids adulterados, tokens forjados e IDOR |
+| `test_formatos.py`, `test_enums.py` | formatação de valores e meses; enums do Python iguais aos do banco |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
 
 Como os testes foram montados:
@@ -512,7 +568,7 @@ Como os testes foram montados:
 - **O teste confere o efeito, não só o status.** Depois de um 404 ou 422, o teste confirma no banco que nada mudou (status do orçamento, contagem de itens, dono do veículo). Os 404 de "é de outro" e "não existe" são comparados pelo texto da resposta.
 - **Testes com a marca `lento`:** a corrida aprovar × recusar (15 rodadas com `threading.Barrier`) e a medição de tempo do login. Rodam no CI; localmente dá para pular.
 
-Para conferir que os testes pegam o defeito, duas mutações foram feitas na `api/` e desfeitas: tirar o `travar=True` do `PATCH` derruba o teste de corrida (`[200, 200]`), e tirar o filtro do dono da `buscar_orcamento_do_usuario` derruba os três testes de 404 idênticos.
+Para conferir que os testes pegam o defeito, duas mutações foram feitas na `api/` e desfeitas: tirar o `travar=True` do `PATCH` derruba o teste de corrida (`[200, 200]`), e tirar o filtro do dono da `buscar_orcamento_do_usuario` derruba os três testes de 404 idênticos. Nos alertas, sete mutações foram pegas, entre elas: ordenar a severidade como texto (`BAIXA` antes de `MEDIA`), trocar `>` por `>=` no limite, tirar a proteção da divisão por zero, tirar o `lower()` da normalização e trocar a busca do dono por `session.get` (IDOR), que derruba três testes de posse.
 
 **Banco de testes local.** Para ficar igual ao do CI, recrie o `bdrevisa_teste` a partir dos arquivos do repositório:
 
@@ -651,7 +707,10 @@ Saída final do script original (máquina do autor): 54 checagens, todas OK. Na 
 | Mensagem do 409 do cadastro e do DELETE | supõem a causa sem checar | revisar quando outras tabelas apontarem para `veiculos` |
 | Arredondamento do banqueiro | os subtotais usam o padrão `ROUND_HALF_EVEN` do Python: `5.005` vira `5.00`. Pode divergir 1 centavo do valor impresso pela oficina. Decisão do autor: manter | revisar |
 | `data_emissao` sem piso | só barra datas futuras; uma data como `0001-01-01` é aceita | revisar |
-| Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça | motor de alertas (S4) |
+| Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça. Não é regra simples: "Alinhamento" é mão de obra numa categoria de suspensão | validação de entrada, depois |
+| Duplicado por abreviação | a normalização ignora acentos e pontuação, mas não reconhece abreviações (`Bba d'água`) | revisar com dados reais |
+| Teto de preço igual para todo veículo | a `precos_referencia` só se liga à categoria: um filtro de Compass diesel e um de Gol têm a mesma faixa | etapa própria (coluna nova) |
+| Botão Authorize do `/docs` | o Swagger envia o login como formulário, e o `POST /login` espera JSON: dá 422. Teste pelo `TestClient` ou por script | deploy |
 | Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
 | Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
 
@@ -720,7 +779,9 @@ api/
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
  ├── config.py       configuração do token (lê JWT_SECRET do .env)
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
- ├── enums.py        enums compartilhados (combustível, grupo, status e tipo de item)
+ ├── enums.py        enums compartilhados (combustível, grupo, status, tipo de item, tipo e severidade de alerta)
+ ├── alertas.py      regras puras dos alertas do orçamento
+ ├── formatos.py     formatação de valores em reais e contagem de meses
  ├── regras.py       regras de negócio puras (anos, combustível × cilindrada, data de emissão, subtotal, total e transição de status)
  ├── models.py       models de usuário, veículo, oficina, categoria, orçamento e item (SQLAlchemy), espelho das tabelas
  └── schemas.py      schemas Pydantic de entrada e de resposta
@@ -757,7 +818,8 @@ alembic.ini          configuração do Alembic (sem senha)
 - [x] API: aprovar ou recusar orçamento
 - [ ] Histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
-- [ ] Motor de alertas
+- [x] Motor de alertas: alertas calculados a partir dos itens (mão de obra, duplicado, valor zerado)
+- [ ] Motor de alertas: troca recente e preço acima da referência
 - [ ] Comparador de orçamentos e aprovação
 - [x] Testes automatizados (pytest) e CI (GitHub Actions)
 - [ ] Deploy
