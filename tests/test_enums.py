@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from api.database import engine
 from api.enums import (
+    FontePrecoEnum,
     GrupoItemEnum,
     SeveridadeAlertaEnum,
     StatusOrcamentoEnum,
@@ -17,6 +18,7 @@ from api.enums import (
     ("enum_python", "tipo_no_banco"),
     [
         (TipoCombustivelEnum, "tipo_combustivel"),
+        (FontePrecoEnum, "fonte_preco"),
         (GrupoItemEnum, "grupo_item"),
         (StatusOrcamentoEnum, "status_orcamento"),
         (TipoItemEnum, "tipo_item"),
