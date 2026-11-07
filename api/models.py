@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from api.enums import (
+    FontePrecoEnum,
     GrupoItemEnum,
     StatusOrcamentoEnum,
     TipoCombustivelEnum,
@@ -118,3 +119,23 @@ class ItemOrcamento(Base):
         Numeric(precision=10, scale=2), server_default="1"
     )
     valor_unitario: Mapped[Decimal] = mapped_column(Numeric(precision=10, scale=2))
+
+
+class PrecoReferencia(Base):
+    __tablename__ = "precos_referencia"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    id_categoria: Mapped[int] = mapped_column(ForeignKey("categorias_item.id"))
+    codigo_peca: Mapped[str | None] = mapped_column(String(50))
+    descricao: Mapped[str] = mapped_column(String(255))
+    valor_min: Mapped[Decimal] = mapped_column(Numeric(precision=10, scale=2))
+    valor_max: Mapped[Decimal] = mapped_column(Numeric(precision=10, scale=2))
+    fonte: Mapped[FontePrecoEnum] = mapped_column(
+        Enum(FontePrecoEnum, name="fonte_preco"),
+        default=FontePrecoEnum.MANUAL,
+        server_default="MANUAL",
+    )
+    amostras: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    atualizado_em: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

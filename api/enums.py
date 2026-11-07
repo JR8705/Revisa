@@ -22,6 +22,12 @@ class GrupoItemEnum(str, enum.Enum):
     SERVICOS = "SERVICOS"
 
 
+class FontePrecoEnum(str, enum.Enum):
+    MANUAL = "MANUAL"
+    HISTORICO = "HISTORICO"
+    EXTERNO = "EXTERNO"
+
+
 class StatusOrcamentoEnum(str, enum.Enum):
     PENDENTE = "PENDENTE"
     APROVADO = "APROVADO"
