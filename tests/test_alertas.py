@@ -1,4 +1,5 @@
 import copy
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -23,6 +24,11 @@ MEDIA = SeveridadeAlertaEnum.MEDIA
 DUPLICADO = TipoAlertaEnum.ITEM_DUPLICADO
 ZERADO = TipoAlertaEnum.VALOR_ZERADO
 MAO_ALTA = TipoAlertaEnum.MAO_OBRA_ALTA
+DATA = date(2026, 6, 1)
+
+
+def gerar(itens):
+    return gerar_alertas(itens, {}, [], {}, 0, DATA)
 
 
 def item(id_item, descricao, tipo, quantidade, valor_unitario):
@@ -121,7 +127,7 @@ def test_normalizar_descricao(texto, esperado):
     ],
 )
 def test_gerar_alertas(itens, esperado):
-    assert resumo(gerar_alertas(itens)) == esperado
+    assert resumo(gerar(itens)) == esperado
 
 
 def test_duplicado_varias_escritas():
@@ -199,7 +205,9 @@ def test_ordem_usa_a_severidade_e_nao_o_texto(monkeypatch):
     monkeypatch.setattr(
         alertas, "alerta_valor_zerado", lambda itens: [falso(ZERADO, ALTA, 9)]
     )
-    assert [a["severidade"] for a in alertas.gerar_alertas([])] == [
+    assert [
+        a["severidade"] for a in alertas.gerar_alertas([], {}, [], {}, 0, DATA)
+    ] == [
         ALTA,
         MEDIA,
         SeveridadeAlertaEnum.BAIXA,
@@ -207,12 +215,12 @@ def test_ordem_usa_a_severidade_e_nao_o_texto(monkeypatch):
 
 
 def test_alerta_tem_os_quatro_campos():
-    for alerta in gerar_alertas(SEED_3 + SEED_5 + SEED_11):
+    for alerta in gerar(SEED_3 + SEED_5 + SEED_11):
         assert set(alerta) == {"tipo", "severidade", "id_item", "mensagem"}
         assert isinstance(alerta["mensagem"], str) and alerta["mensagem"]
 
 
 def test_nao_altera_os_itens_recebidos():
     itens = copy.deepcopy(SEED_3)
-    gerar_alertas(itens)
+    gerar(itens)
     assert itens == SEED_3
