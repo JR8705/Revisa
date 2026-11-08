@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os primeiros alertas automáticos (mão de obra alta, item duplicado e valor zerado). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 301 testes automatizados (pytest) rodam no GitHub Actions a cada push. Os alertas que dependem do histórico e dos preços de referência e as manutenções ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 360 testes automatizados (pytest) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
 
 ## O problema
 
@@ -29,7 +29,7 @@ Quem não entende de mecânica não tem como saber se um orçamento está caro, 
 | `CONSUMIVEL_CARO` | Consumíveis (estopa, graxa, etc.) acima do esperado |
 | `VALOR_ZERADO` | Item sem valor, que pode virar cobrança depois |
 
-Já funcionam: `MAO_OBRA_ALTA`, `ITEM_DUPLICADO` e `VALOR_ZERADO` (ver [Alertas do orçamento](#alertas-do-orçamento)). `TROCA_RECENTE` e `PRECO_ACIMA_MEDIA` são a próxima etapa; `ITEM_GENERICO` e `CONSUMIVEL_CARO` vêm depois.
+Já funcionam: `MAO_OBRA_ALTA`, `ITEM_DUPLICADO`, `VALOR_ZERADO`, `PRECO_ACIMA_MEDIA` (contra a faixa de referência) e `TROCA_RECENTE` (ver [Alertas do orçamento](#alertas-do-orçamento)). A comparação com orçamento concorrente, `ITEM_GENERICO` e `CONSUMIVEL_CARO` vêm depois.
 
 ## Modelo de dados
 
@@ -85,7 +85,7 @@ O `queries.sql` traz as consultas usadas para validar o modelo, cada uma com o r
 
 ## Como rodar a API
 
-> Em construção: cadastro, login, CRUD de veículos, orçamentos, itens, aprovação de orçamento e os alertas calculados só a partir dos itens estão prontos; os alertas com histórico e preço de referência e as manutenções ainda serão criados.
+> Em construção: cadastro, login, CRUD de veículos, orçamentos, itens, aprovação de orçamento e os alertas (itens, preço de referência e troca recente) estão prontos; as manutenções ainda serão criadas.
 
 Pré-requisitos: Python 3.11 ou superior (o CI usa o 3.14) e o banco criado conforme a seção anterior.
 
@@ -154,7 +154,7 @@ O `schema.sql` é mantido igual ao resultado das migrações: um banco criado do
 
 O `alembic/env.py` lê a conexão da mesma `DATABASE_URL` do `.env` usada pela API, então o `alembic.ini` continua só com o endereço de exemplo e nenhuma senha vai para o repositório.
 
-**Atenção:** o model descreve `usuarios`, `veiculos`, `oficinas`, `categorias_item`, `orcamentos` e `itens_orcamento`, mas ainda não `precos_referencia`, `alertas` e `manutencoes`. Por isso o `alembic revision --autogenerate` hoje propõe apagar essas três tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
+**Atenção:** o model descreve `usuarios`, `veiculos`, `oficinas`, `categorias_item`, `orcamentos`, `itens_orcamento` e `precos_referencia`, mas ainda não `alertas` e `manutencoes`. Por isso o `alembic revision --autogenerate` hoje propõe apagar essas duas tabelas. Migrações geradas automaticamente precisam sempre ser revisadas antes de rodar.
 
 Com o servidor rodando, a documentação interativa da API fica em `http://127.0.0.1:8000/docs`.
 
@@ -491,30 +491,41 @@ Decisões:
 Os alertas apontam o que merece atenção antes de aprovar. São **calculados a cada consulta**, a partir dos itens atuais do orçamento, e não ficam gravados: enquanto o orçamento está `PENDENTE` os itens mudam, e um alerta gravado ficaria velho.
 
 ```
-GET .../alertas → buscar_orcamento_do_usuario (dono no WHERE) → montar_itens → gerar_alertas → lista ordenada
+GET .../alertas → buscar_orcamento_do_usuario (dono no WHERE) → montar_itens
+               → tetos (precos_referencia) + intervalos (categorias_item) + histórico (aprovados do mesmo veículo)
+               → gerar_alertas → lista ordenada
 ```
 
-A rota só busca os dados. Quem decide são funções puras em `api/alertas.py`, que recebem a lista de itens (a mesma que o `GET` do orçamento mostra, montada por `montar_itens`) e não tocam no banco.
+A rota só busca os dados. Quem decide são funções puras em `api/alertas.py`, que recebem a lista de itens (a mesma que o `GET` do orçamento mostra, montada por `montar_itens`), os tetos, os intervalos, o histórico, o km e a data do orçamento, e não tocam no banco.
 
 | Alerta | Regra | Severidade | Aponta para |
 |---|---|---|---|
 | `MAO_OBRA_ALTA` | soma dos itens `MAO_OBRA` (diagnóstico incluído) **maior que** 50% do total (`LIMITE_MAO_OBRA`) | `MEDIA` | o orçamento (`id_item` nulo) |
 | `ITEM_DUPLICADO` | mesma descrição depois de `normalizar_descricao`: sem acentos, espaços, pontuação e maiúsculas (`Bomba d'água`, `BOMBA DAGUA` e `bomba-d agua` viram `bombadagua`) | `ALTA` | a **segunda** ocorrência em diante |
 | `VALOR_ZERADO` | `valor_unitario` igual a zero | `ALTA` | o item |
+| `PRECO_ACIMA_MEDIA` | item `PECA` com `valor_unitario` **maior que** o teto da categoria (maior `valor_max` da fonte `MANUAL`) | `ALTA` se passar de 20% (`LIMITE_PRECO_ALTA`), senão `MEDIA` | o item |
+| `TROCA_RECENTE` | item `PECA` cuja categoria foi trocada num orçamento `APROVADO` anterior **do mesmo veículo** e **nenhum** intervalo da categoria (km ou meses completos) foi atingido; vale a troca mais recente (empate de data: a de maior km); categoria sem intervalo é ignorada | `ALTA` | o item |
 
 A lista sai ordenada por severidade (`ALTA`, `MEDIA`, `BAIXA`) e, dentro dela, pelo `id_item`, com o alerta do orçamento inteiro por último.
 
-Resposta de `GET /veiculos/2/orcamentos/5/alertas` (orçamento 5 do seed: óleo, filtro e mão de obra de R$ 350):
+Resposta de `GET /veiculos/2/orcamentos/5/alertas` (orçamento 5 do seed: óleo e filtro trocados de novo 2.200 km depois do orçamento 4, aprovado, e mão de obra de R$ 350):
 
 ```json
-[{"tipo": "MAO_OBRA_ALTA", "severidade": "MEDIA", "id_item": null, "mensagem": "Mão de obra representa 51.09% do total (limite de 50%)."}]
+[
+  {"tipo": "TROCA_RECENTE", "severidade": "ALTA", "id_item": 21, "mensagem": "O item 'Óleo 0W20 sintético (litro)' foi trocado há 2200 km e 1 meses."},
+  {"tipo": "TROCA_RECENTE", "severidade": "ALTA", "id_item": 22, "mensagem": "O item 'Filtro de óleo' foi trocado há 2200 km e 1 meses."},
+  {"tipo": "MAO_OBRA_ALTA", "severidade": "MEDIA", "id_item": null, "mensagem": "Mão de obra representa 51.09% do total (limite de 50%)."}
+]
 ```
 
 Respostas observadas:
 
 | Requisição | Status | Resultado |
 |---|---|---|
-| Orçamento 3 do seed (bomba d'água lançada duas vezes) | 200 | `ITEM_DUPLICADO` no item 12 |
+| Orçamento 3 do seed (kit correia caro, bomba d'água lançada duas vezes) | 200 | `PRECO_ACIMA_MEDIA` `ALTA` no item 10 (38%), `ITEM_DUPLICADO` no 12, `PRECO_ACIMA_MEDIA` `MEDIA` nos itens 11 e 12 (18,75%) |
+| Orçamento 13 do seed (bico diesel a R$ 1.500, teto R$ 1.200) | 200 | `PRECO_ACIMA_MEDIA` `ALTA` (exatamente 25%) |
+| Preço igual ao teto, ou categoria sem teto (mão de obra) | 200 | sem alerta de preço |
+| Troca anterior `PENDENTE`/`RECUSADA`, com data posterior, de outro veículo do mesmo dono ou de outro usuário | 200 | sem `TROCA_RECENTE` |
 | Orçamento sem itens, ou sem nada a apontar | 200 | `[]` |
 | Todos os itens com valor zero | 200 | um `VALOR_ZERADO` por item, sem divisão por zero |
 | Orçamento já `APROVADO` ou `RECUSADO` | 200 | os alertas continuam (servem de histórico) |
@@ -528,12 +539,16 @@ Decisões:
 - **Duplicado pela descrição, não pela categoria:** pela categoria, amortecedor dianteiro e traseiro (trocar os dois é normal) virariam alerta. Preço diferente não esconde a repetição.
 - **Limite estrito:** exatamente 50% não alerta.
 - **Severidades** seguem o `seed.sql`: cobrança em dobro e item sem valor são `ALTA`; mão de obra alta pode ter explicação (serviço difícil com peça barata) e é `MEDIA`.
+- **Teto por preço unitário:** a faixa é por unidade (litro, frasco, jogo); comparar o subtotal faria 4 litros de óleo baratos parecerem caros.
+- **Só itens `PECA`** geram preço acima do teto e troca recente: o teto e o intervalo são de peça.
+- **Faixas `MANUAL`:** as categorias de peça têm faixa no `seed.sql`, pesquisada no varejo online em 05/11/2026; o teto é o maior preço achado × 1,5 (revenda da oficina) e cada linha traz a fonte. Mão de obra, serviços e consumíveis não têm teto.
 - **Sem trava:** a rota só lê. Travar a linha faria a aprovação e a inclusão de itens esperarem cada consulta, sem impedir nenhuma corrida.
 
 Segurança:
 
 - **O dono continua no `WHERE`** (`buscar_orcamento_do_usuario`): o intruso recebe o mesmo 404 de um orçamento inexistente, sem saber se há alertas.
-- **Consultas internas também filtram:** os próximos alertas (`TROCA_RECENTE`) vão ler orçamentos anteriores. A consulta filtra pelo veículo do orçamento já validado (`orcamento.id_veiculo`, nunca o id da URL). Filtrar só pela categoria traria trocas de outros usuários, e a mensagem do alerta vazaria data, km e número do orçamento alheio (um IDOR por um caminho lateral).
+- **Consultas internas também filtram:** o `TROCA_RECENTE` lê orçamentos anteriores, e a consulta filtra pelo veículo do orçamento já validado (`orcamento.id_veiculo`, nunca o id da URL). Sem esse filtro, a troca aprovada de outro usuário apareceria como "anterior" e a mensagem do alerta vazaria o km e a época da manutenção alheia (um IDOR por um caminho lateral). Um teste cria a troca no veículo do intruso e confere que o dono não recebe alerta; a mutação que compara com `Veiculo.id` (coluna com coluna, sem filtrar nada) derruba 21 testes.
+- **Tetos não têm dono:** `precos_referencia` é catálogo compartilhado, como oficinas e categorias, e a consulta não filtra por usuário (não é IDOR). O risco futuro é outro: quando o teto vier dos preços lançados pelos usuários (fonte `HISTORICO`), alguém pode lançar preços falsos para mexer nele (envenenamento de dados). Por isso só a fonte `MANUAL` conta hoje.
 - **XSS na mensagem:** a mensagem repete a descrição digitada, e na S3 a descrição virá do PDF da oficina. A API devolve JSON e guarda o texto original; quem mostrar a mensagem numa tela precisa escapar o texto na saída (o React faz isso por padrão; o risco é usar `innerHTML` ou `dangerouslySetInnerHTML`), para que um `<script>` gravado na descrição não rode no navegador de quem abre o orçamento (XSS armazenado).
 
 ### Testes automatizados
@@ -555,7 +570,8 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_orcamentos.py` | criar e consultar orçamento, adicionar item, IDOR aninhado |
 | `test_aprovacao.py` | aprovação e o red team (R1 a R8), inclusive a corrida |
 | `test_alertas.py` | regras puras dos alertas: normalização da descrição, limite da mão de obra, duplicados, ordem e os orçamentos 3, 5 e 11 do seed |
-| `test_alertas_api.py` | a rota de alertas: resposta, seed, ids adulterados, tokens forjados e IDOR |
+| `test_alertas_historico.py` | regras puras do preço acima do teto e da troca recente: limites, unitário × subtotal, troca mais recente, empate, intervalos só de meses e ordem final |
+| `test_alertas_api.py` | a rota de alertas: resposta, os 14 orçamentos do seed, teto só da fonte `MANUAL`, troca recente (status, data, outro veículo, outro usuário), ids adulterados, tokens forjados e IDOR |
 | `test_formatos.py`, `test_enums.py` | formatação de valores e meses; enums do Python iguais aos do banco |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
 
@@ -568,7 +584,7 @@ Como os testes foram montados:
 - **O teste confere o efeito, não só o status.** Depois de um 404 ou 422, o teste confirma no banco que nada mudou (status do orçamento, contagem de itens, dono do veículo). Os 404 de "é de outro" e "não existe" são comparados pelo texto da resposta.
 - **Testes com a marca `lento`:** a corrida aprovar × recusar (15 rodadas com `threading.Barrier`) e a medição de tempo do login. Rodam no CI; localmente dá para pular.
 
-Para conferir que os testes pegam o defeito, duas mutações foram feitas na `api/` e desfeitas: tirar o `travar=True` do `PATCH` derruba o teste de corrida (`[200, 200]`), e tirar o filtro do dono da `buscar_orcamento_do_usuario` derruba os três testes de 404 idênticos. Nos alertas, sete mutações foram pegas, entre elas: ordenar a severidade como texto (`BAIXA` antes de `MEDIA`), trocar `>` por `>=` no limite, tirar a proteção da divisão por zero, tirar o `lower()` da normalização e trocar a busca do dono por `session.get` (IDOR), que derruba três testes de posse.
+Para conferir que os testes pegam o defeito, duas mutações foram feitas na `api/` e desfeitas: tirar o `travar=True` do `PATCH` derruba o teste de corrida (`[200, 200]`), e tirar o filtro do dono da `buscar_orcamento_do_usuario` derruba os três testes de 404 idênticos. Nos alertas, sete mutações foram pegas, entre elas: ordenar a severidade como texto (`BAIXA` antes de `MEDIA`), trocar `>` por `>=` no limite, tirar a proteção da divisão por zero, tirar o `lower()` da normalização e trocar a busca do dono por `session.get` (IDOR), que derruba três testes de posse. Na parte B, mais onze, todas pegas: histórico sem o filtro do veículo (21 testes), sem o filtro `APROVADO`, sem o filtro de data, `Orcamento.id != Orcamento.id` (histórico sempre vazio), `min` no lugar de `max` e teto sem o filtro `MANUAL` (os dois últimos só caíram depois de um teste com faixas extras, porque o seed tem uma faixa por categoria), preço igual ao teto alertando, `>=` no limite de 20% e ignorar os meses.
 
 **Banco de testes local.** Para ficar igual ao do CI, recrie o `bdrevisa_teste` a partir dos arquivos do repositório:
 
@@ -709,7 +725,9 @@ Saída final do script original (máquina do autor): 54 checagens, todas OK. Na 
 | `data_emissao` sem piso | só barra datas futuras; uma data como `0001-01-01` é aceita | revisar |
 | Tipo do item × grupo da categoria | nada impede um item `MAO_OBRA` com uma categoria de peça. Não é regra simples: "Alinhamento" é mão de obra numa categoria de suspensão | validação de entrada, depois |
 | Duplicado por abreviação | a normalização ignora acentos e pontuação, mas não reconhece abreviações (`Bba d'água`) | revisar com dados reais |
-| Teto de preço igual para todo veículo | a `precos_referencia` só se liga à categoria: um filtro de Compass diesel e um de Gol têm a mesma faixa | etapa própria (coluna nova) |
+| Teto de preço igual para todo veículo | a `precos_referencia` só se liga à categoria: para não dar falso alarme no Compass diesel, o teto fica folgado para o Gol (filtro de combustível: teto R$ 240 para peça de R$ 25 a 50) | etapa própria (coluna nova) |
+| Unidade do item × unidade da faixa | o teto é por unidade (litro, frasco, jogo); se a oficina lançar "par" ou galão, a comparação sai errada | com dados reais (upload) |
+| Faixas de preço são um retrato | pesquisadas em 05/11/2026 no varejo online; o fator 1,5 é decisão, não dado | fonte `HISTORICO`/`EXTERNO` |
 | Botão Authorize do `/docs` | o Swagger envia o login como formulário, e o `POST /login` espera JSON: dá 422. Teste pelo `TestClient` ou por script | deploy |
 | Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
 | Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
@@ -779,11 +797,11 @@ api/
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
  ├── config.py       configuração do token (lê JWT_SECRET do .env)
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
- ├── enums.py        enums compartilhados (combustível, grupo, status, tipo de item, tipo e severidade de alerta)
+ ├── enums.py        enums compartilhados (combustível, grupo, status, tipo de item, fonte de preço, tipo e severidade de alerta)
  ├── alertas.py      regras puras dos alertas do orçamento
  ├── formatos.py     formatação de valores em reais e contagem de meses
  ├── regras.py       regras de negócio puras (anos, combustível × cilindrada, data de emissão, subtotal, total e transição de status)
- ├── models.py       models de usuário, veículo, oficina, categoria, orçamento e item (SQLAlchemy), espelho das tabelas
+ ├── models.py       models de usuário, veículo, oficina, categoria, orçamento, item e preço de referência (SQLAlchemy), espelho das tabelas
  └── schemas.py      schemas Pydantic de entrada e de resposta
 
 alembic/
@@ -819,7 +837,7 @@ alembic.ini          configuração do Alembic (sem senha)
 - [ ] Histórico de manutenções
 - [ ] Upload do orçamento e extração automática dos itens
 - [x] Motor de alertas: alertas calculados a partir dos itens (mão de obra, duplicado, valor zerado)
-- [ ] Motor de alertas: troca recente e preço acima da referência
+- [x] Motor de alertas: troca recente e preço acima da referência
 - [ ] Comparador de orçamentos e aprovação
 - [x] Testes automatizados (pytest) e CI (GitHub Actions)
 - [ ] Deploy
