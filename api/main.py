@@ -3,19 +3,20 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Path
 from fastapi.exceptions import RequestValidationError
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.alertas import gerar_alertas
 from api.database import engine
-from api.enums import StatusOrcamentoEnum
+from api.enums import FontePrecoEnum, StatusOrcamentoEnum
 from api.erros import validacao_sem_input
 from api.models import (
     CategoriaItem,
     ItemOrcamento,
     Oficina,
     Orcamento,
+    PrecoReferencia,
     Usuario,
     Veiculo,
 )
@@ -515,4 +516,38 @@ def get_alertas(
 
         itens = montar_itens(session, orcamento)
 
-        return gerar_alertas(itens)
+        tetos = {}
+        linhas_teto = session.execute(
+            select(PrecoReferencia.id_categoria, func.max(PrecoReferencia.valor_max))
+            .where(PrecoReferencia.fonte == FontePrecoEnum.MANUAL)
+            .group_by(PrecoReferencia.id_categoria)
+        ).all()
+        for id_categoria, teto in linhas_teto:
+            tetos[id_categoria] = teto
+
+        intervalos = {}
+        for categoria in session.scalars(select(CategoriaItem)).all():
+            intervalos[categoria.id] = (
+                categoria.intervalo_km,
+                categoria.intervalo_meses,
+            )
+
+        historico = []
+        linhas_historico = session.execute(
+            select(ItemOrcamento.id_categoria, Orcamento.data_emissao, Orcamento.km)
+            .join(Orcamento)
+            .where(
+                Orcamento.id_veiculo == orcamento.id_veiculo,
+                Orcamento.status == StatusOrcamentoEnum.APROVADO,
+                Orcamento.id != orcamento.id,
+                Orcamento.data_emissao <= orcamento.data_emissao,
+            )
+        ).all()
+        for id_categoria, data_emissao, km in linhas_historico:
+            historico.append(
+                {"id_categoria": id_categoria, "data_emissao": data_emissao, "km": km}
+            )
+
+        return gerar_alertas(
+            itens, tetos, historico, intervalos, orcamento.km, orcamento.data_emissao
+        )

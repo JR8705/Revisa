@@ -1,7 +1,15 @@
-import pytest
+from decimal import Decimal
 
+import pytest
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
+
+from api.database import engine
+from api.enums import FontePrecoEnum
+from api.models import PrecoReferencia
 from apoio import (
     APROVAR,
+    ID_OFICINA,
     RECUSAR,
     TOKENS_FORJADOS,
     cabecalho,
@@ -12,10 +20,45 @@ from apoio import (
 
 INEXISTENTE = 2147483647
 CAMPOS = {"tipo", "severidade", "id_item", "mensagem"}
+OLEO = {
+    "id_categoria": 2,
+    "descricao": "Óleo sintético (litro)",
+    "tipo": "PECA",
+    "quantidade": "4.00",
+    "valor_unitario": "60.00",
+}
 
 
 def url(id_veiculo, id_orcamento):
     return f"/veiculos/{id_veiculo}/orcamentos/{id_orcamento}/alertas"
+
+
+def resumo(resposta):
+    return [(a["tipo"], a["severidade"], a["id_item"]) for a in resposta.json()]
+
+
+def orcamento_em(client, headers, id_veiculo, data, km, itens, decisao=None):
+    corpo = {"id_oficina": ID_OFICINA, "data_emissao": data, "km": km}
+    r = client.post(f"/veiculos/{id_veiculo}/orcamentos", json=corpo, headers=headers)
+    assert r.status_code == 201, r.text
+    id_orcamento = r.json()["id"]
+    ids_itens = []
+    for item in itens:
+        r = client.post(
+            f"/veiculos/{id_veiculo}/orcamentos/{id_orcamento}/itens",
+            json=item,
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        ids_itens.append(r.json()["id"])
+    if decisao:
+        r = client.patch(
+            f"/veiculos/{id_veiculo}/orcamentos/{id_orcamento}",
+            json=decisao,
+            headers=headers,
+        )
+        assert r.status_code == 200, r.text
+    return id_orcamento, ids_itens
 
 
 @pytest.fixture
@@ -112,24 +155,228 @@ class TestAlertas:
 
 
 class TestSeed:
-    def test_seed_5_mao_de_obra(self, client, login_seed):
+    def test_seed_5_troca_recente_e_mao_de_obra(self, client, login_seed):
         r = client.get(url(2, 5), headers=login_seed("carlos.mendes@email.com"))
         assert r.status_code == 200
-        alertas = r.json()
-        assert [(a["tipo"], a["severidade"], a["id_item"]) for a in alertas] == [
-            ("MAO_OBRA_ALTA", "MEDIA", None)
+        assert resumo(r) == [
+            ("TROCA_RECENTE", "ALTA", 21),
+            ("TROCA_RECENTE", "ALTA", 22),
+            ("MAO_OBRA_ALTA", "MEDIA", None),
         ]
-        assert "51.09" in alertas[0]["mensagem"]
+        mensagens = [a["mensagem"] for a in r.json()]
+        assert "2200 km e 1 meses" in mensagens[0]
+        assert "51.09" in mensagens[2]
 
-    def test_seed_3_duplicado(self, client, login_seed):
+    def test_seed_3_preco_e_duplicado(self, client, login_seed):
         r = client.get(url(1, 3), headers=login_seed("carlos.mendes@email.com"))
         assert r.status_code == 200
-        assert [(a["tipo"], a["id_item"]) for a in r.json()] == [("ITEM_DUPLICADO", 12)]
+        assert resumo(r) == [
+            ("PRECO_ACIMA_MEDIA", "ALTA", 10),
+            ("ITEM_DUPLICADO", "ALTA", 12),
+            ("PRECO_ACIMA_MEDIA", "MEDIA", 11),
+            ("PRECO_ACIMA_MEDIA", "MEDIA", 12),
+        ]
+        assert "38.00%" in r.json()[0]["mensagem"]
 
-    def test_seed_1_sem_alertas(self, client, login_seed):
-        r = client.get(url(1, 1), headers=login_seed("carlos.mendes@email.com"))
+    @pytest.mark.parametrize(
+        ("email", "id_veiculo", "id_orcamento", "esperado"),
+        [
+            (
+                "ana.ribeiro@email.com",
+                4,
+                8,
+                [("PRECO_ACIMA_MEDIA", "MEDIA", 32)],
+            ),
+            (
+                "marcos.teixeira@email.com",
+                5,
+                11,
+                [("VALOR_ZERADO", "ALTA", 48), ("PRECO_ACIMA_MEDIA", "MEDIA", 47)],
+            ),
+            (
+                "marcos.teixeira@email.com",
+                6,
+                13,
+                [("PRECO_ACIMA_MEDIA", "ALTA", 57)],
+            ),
+        ],
+        ids=["seed-8", "seed-11", "seed-13"],
+    )
+    def test_seed_preco(
+        self, client, login_seed, email, id_veiculo, id_orcamento, esperado
+    ):
+        r = client.get(url(id_veiculo, id_orcamento), headers=login_seed(email))
+        assert r.status_code == 200
+        assert resumo(r) == esperado
+
+    @pytest.mark.parametrize(
+        ("email", "id_veiculo", "id_orcamento"),
+        [
+            ("carlos.mendes@email.com", 1, 1),
+            ("carlos.mendes@email.com", 1, 2),
+            ("carlos.mendes@email.com", 2, 4),
+            ("carlos.mendes@email.com", 2, 14),
+            ("ana.ribeiro@email.com", 3, 6),
+            ("ana.ribeiro@email.com", 3, 7),
+            ("ana.ribeiro@email.com", 4, 9),
+            ("marcos.teixeira@email.com", 5, 10),
+            ("marcos.teixeira@email.com", 6, 12),
+        ],
+    )
+    def test_seed_sem_alertas(
+        self, client, login_seed, email, id_veiculo, id_orcamento
+    ):
+        r = client.get(url(id_veiculo, id_orcamento), headers=login_seed(email))
         assert r.status_code == 200
         assert r.json() == []
+
+
+@pytest.fixture
+def faixas_extras():
+    with Session(engine) as s:
+        novas = [
+            PrecoReferencia(
+                id_categoria=10,
+                codigo_peca="PYTEST-MANUAL",
+                descricao="Pastilha importada",
+                valor_min=Decimal("200.00"),
+                valor_max=Decimal("300.00"),
+                fonte=FontePrecoEnum.MANUAL,
+            ),
+            PrecoReferencia(
+                id_categoria=10,
+                descricao="Pastilha (preço dos usuários)",
+                valor_min=Decimal("100.00"),
+                valor_max=Decimal("1000.00"),
+                fonte=FontePrecoEnum.HISTORICO,
+            ),
+        ]
+        s.add_all(novas)
+        s.commit()
+        ids = [n.id for n in novas]
+    yield
+    with Session(engine) as s:
+        s.execute(delete(PrecoReferencia).where(PrecoReferencia.id.in_(ids)))
+        s.commit()
+
+
+class TestPrecoETroca:
+    def test_preco_acima_do_teto(self, client, cenario):
+        c = cenario
+        pastilha = {
+            **OLEO,
+            "id_categoria": 10,
+            "descricao": "Pastilha",
+            "quantidade": "1.00",
+        }
+        atual, ids = orcamento_em(
+            client,
+            c["dono"],
+            c["veic_dono"],
+            "2026-03-10",
+            32000,
+            [{**pastilha, "valor_unitario": "250.00"}],
+        )
+        r = client.get(url(c["veic_dono"], atual), headers=c["dono"])
+        assert resumo(r) == [("PRECO_ACIMA_MEDIA", "ALTA", ids[0])]
+
+    def test_teto_e_o_maior_valor_max_so_da_fonte_manual(
+        self, client, cenario, faixas_extras
+    ):
+        c = cenario
+        pastilha = {
+            **OLEO,
+            "id_categoria": 10,
+            "descricao": "Pastilha",
+            "quantidade": "1.00",
+            "valor_unitario": "350.00",
+        }
+        atual, ids = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [pastilha]
+        )
+        r = client.get(url(c["veic_dono"], atual), headers=c["dono"])
+        assert resumo(r) == [("PRECO_ACIMA_MEDIA", "MEDIA", ids[0])]
+        assert "(R$ 300,00)" in r.json()[0]["mensagem"]
+
+    def test_troca_recente_no_mesmo_veiculo(self, client, cenario):
+        c = cenario
+        orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-01-10", 30000, [OLEO], APROVAR
+        )
+        atual, ids = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [OLEO]
+        )
+        r = client.get(url(c["veic_dono"], atual), headers=c["dono"])
+        assert resumo(r) == [("TROCA_RECENTE", "ALTA", ids[0])]
+        assert "2000 km e 2 meses" in r.json()[0]["mensagem"]
+
+    @pytest.mark.parametrize(
+        "decisao", [None, RECUSAR], ids=["anterior-pendente", "anterior-recusado"]
+    )
+    def test_anterior_nao_aprovado_nao_conta(self, client, cenario, decisao):
+        c = cenario
+        orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-01-10", 30000, [OLEO], decisao
+        )
+        atual, _ = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [OLEO]
+        )
+        assert client.get(url(c["veic_dono"], atual), headers=c["dono"]).json() == []
+
+    def test_anterior_com_data_posterior_nao_conta(self, client, cenario):
+        c = cenario
+        orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-05-10", 30000, [OLEO], APROVAR
+        )
+        atual, _ = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [OLEO]
+        )
+        assert client.get(url(c["veic_dono"], atual), headers=c["dono"]).json() == []
+
+    def test_km_atingido_nao_alerta(self, client, cenario):
+        c = cenario
+        orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-01-10", 30000, [OLEO], APROVAR
+        )
+        atual, _ = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 40000, [OLEO]
+        )
+        assert client.get(url(c["veic_dono"], atual), headers=c["dono"]).json() == []
+
+    def test_aprovado_nao_compara_com_ele_mesmo(self, client, cenario):
+        c = cenario
+        atual, _ = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [OLEO], APROVAR
+        )
+        assert client.get(url(c["veic_dono"], atual), headers=c["dono"]).json() == []
+
+    def test_outro_veiculo_do_mesmo_dono_nao_conta(self, client, cenario):
+        c = cenario
+        orcamento_em(
+            client, c["dono"], c["veic_dono_2"], "2026-01-10", 30000, [OLEO], APROVAR
+        )
+        atual, _ = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [OLEO]
+        )
+        assert client.get(url(c["veic_dono"], atual), headers=c["dono"]).json() == []
+
+    def test_troca_de_outro_usuario_nao_vaza(self, client, cenario):
+        c = cenario
+        orcamento_em(
+            client,
+            c["intruso"],
+            c["veic_intruso"],
+            "2026-01-10",
+            30000,
+            [OLEO],
+            APROVAR,
+        )
+        atual, _ = orcamento_em(
+            client, c["dono"], c["veic_dono"], "2026-03-10", 32000, [OLEO]
+        )
+        r = client.get(url(c["veic_dono"], atual), headers=c["dono"])
+        assert r.json() == []
+        assert "trocado" not in r.text
 
 
 class TestIds:

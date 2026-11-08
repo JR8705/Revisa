@@ -2,8 +2,10 @@ import unicodedata
 from decimal import Decimal
 
 from api.enums import SeveridadeAlertaEnum, TipoAlertaEnum, TipoItemEnum
+from api.formatos import meses_entre, reais
 
 LIMITE_MAO_OBRA = Decimal("0.50")
+LIMITE_PRECO_ALTA = Decimal("0.20")
 ORDEM_SEVERIDADE = {
     SeveridadeAlertaEnum.ALTA: 0,
     SeveridadeAlertaEnum.MEDIA: 1,
@@ -96,12 +98,96 @@ def alerta_valor_zerado(itens):
     return alertas
 
 
-def gerar_alertas(itens):
+def alerta_preco_acima(itens, tetos):
+    alertas = []
+
+    for item in itens:
+        if item["tipo"] != TipoItemEnum.PECA:
+            continue
+        teto = tetos.get(item["id_categoria"])
+        if teto is None:
+            continue
+        valor = item["valor_unitario"]
+        if valor <= teto:
+            continue
+        excesso = valor / teto - 1
+        if excesso > LIMITE_PRECO_ALTA:
+            severidade = SeveridadeAlertaEnum.ALTA
+        else:
+            severidade = SeveridadeAlertaEnum.MEDIA
+        alertas.append(
+            {
+                "tipo": TipoAlertaEnum.PRECO_ACIMA_MEDIA,
+                "severidade": severidade,
+                "id_item": item["id"],
+                "mensagem": f"O item '{item['descricao']}' custa {reais(valor)}, {excesso * 100:.2f}% acima do teto de referência ({reais(teto)}).",
+            }
+        )
+    return alertas
+
+
+def alerta_troca_recente(itens, historico, intervalos, km, data_emissao):
+    alertas = []
+
+    for item in itens:
+        if item["tipo"] != TipoItemEnum.PECA:
+            continue
+
+        intervalo_km, intervalo_meses = intervalos.get(
+            item["id_categoria"], (None, None)
+        )
+
+        if intervalo_km is None and intervalo_meses is None:
+            continue
+
+        anterior = None
+
+        for troca in historico:
+            if troca["id_categoria"] != item["id_categoria"]:
+                continue
+
+            if anterior is None or (troca["data_emissao"], troca["km"]) > (
+                anterior["data_emissao"],
+                anterior["km"],
+            ):
+                anterior = troca
+
+        if anterior is None:
+            continue
+
+        km_rodado = km - anterior["km"]
+        meses = meses_entre(anterior["data_emissao"], data_emissao)
+
+        prazo_km_atingido = intervalo_km is not None and km_rodado >= intervalo_km
+
+        prazo_meses_atingido = intervalo_meses is not None and meses >= intervalo_meses
+
+        if not prazo_km_atingido and not prazo_meses_atingido:
+            alertas.append(
+                {
+                    "tipo": TipoAlertaEnum.TROCA_RECENTE,
+                    "severidade": SeveridadeAlertaEnum.ALTA,
+                    "id_item": item["id"],
+                    "mensagem": (
+                        f"O item '{item['descricao']}' foi trocado há "
+                        f"{km_rodado} km e {meses} meses."
+                    ),
+                }
+            )
+
+    return alertas
+
+
+def gerar_alertas(itens, tetos, historico, intervalos, km, data_emissao):
 
     todos_alertas = []
     todos_alertas.extend(alerta_mao_obra(itens))
     todos_alertas.extend(alerta_duplicado(itens))
     todos_alertas.extend(alerta_valor_zerado(itens))
+    todos_alertas.extend(alerta_preco_acima(itens, tetos))
+    todos_alertas.extend(
+        alerta_troca_recente(itens, historico, intervalos, km, data_emissao)
+    )
 
     todos_alertas.sort(
         key=lambda x: (
