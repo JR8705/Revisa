@@ -36,6 +36,7 @@ from api.schemas import (
     OrcamentoDetalheResposta,
     OrcamentoResposta,
     OrcamentoStatusAtualizar,
+    Texto,
     TokenResposta,
     UsuarioCriar,
     UsuarioResposta,
@@ -111,7 +112,7 @@ def get_id_veiculo(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
 
 @app.get("/veiculos/placa/{veiculo_placa}", response_model=list[VeiculoResposta])
 def get_veiculo_placa(
-    veiculo_placa: Annotated[str, Path(max_length=10)], id_usuario_validado: IdUsuario
+    veiculo_placa: Annotated[Texto, Path(max_length=10)], id_usuario_validado: IdUsuario
 ):
 
     placa_tratada = veiculo_placa.strip().upper()

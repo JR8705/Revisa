@@ -1,8 +1,9 @@
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     EmailStr,
@@ -18,7 +19,16 @@ from api.enums import (
     TipoCombustivelEnum,
     TipoItemEnum,
 )
-from api.regras import ano_valido, combustivel_valido, emissao_valida
+from api.regras import ano_valido, combustivel_valido, emissao_valida, texto_sem_nulo
+
+
+def sem_nulo(texto):
+    if texto is not None and not texto_sem_nulo(texto):
+        raise ValueError("Texto com caractere inválido.")
+    return texto
+
+
+Texto = Annotated[str, AfterValidator(sem_nulo)]
 
 
 class VeiculoResposta(BaseModel):
@@ -39,15 +49,15 @@ class VeiculoResposta(BaseModel):
 class VeiculoCriar(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    marca: str = Field(min_length=2, max_length=50)
-    modelo: str = Field(min_length=2, max_length=80)
-    motor: str | None = Field(default=None, max_length=30)
+    marca: Texto = Field(min_length=2, max_length=50)
+    modelo: Texto = Field(min_length=2, max_length=80)
+    motor: Texto | None = Field(default=None, max_length=30)
     combustivel: TipoCombustivelEnum
     cilindrada: Decimal | None = Field(
         default=None, gt=0, max_digits=3, decimal_places=1, allow_inf_nan=False
     )
     turbo: bool = Field(default=False)
-    placa: str | None = Field(default=None, max_length=10)
+    placa: Texto | None = Field(default=None, max_length=10)
     ano_fabricacao: int = Field(ge=1886, le=2027)
     ano_modelo: int = Field(ge=1886, le=2027)
     km_atual: int = Field(default=0, ge=0, le=6000000)
@@ -72,15 +82,15 @@ class VeiculoCriar(BaseModel):
 class VeiculoAtualizar(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    marca: str = Field(default=None, min_length=2, max_length=50)
-    modelo: str = Field(default=None, min_length=2, max_length=80)
-    motor: str | None = Field(default=None, max_length=30)
+    marca: Texto = Field(default=None, min_length=2, max_length=50)
+    modelo: Texto = Field(default=None, min_length=2, max_length=80)
+    motor: Texto | None = Field(default=None, max_length=30)
     combustivel: TipoCombustivelEnum = Field(default=None)
     cilindrada: Decimal | None = Field(
         default=None, gt=0, max_digits=3, decimal_places=1, allow_inf_nan=False
     )
     turbo: bool = Field(default=None)
-    placa: str | None = Field(default=None, max_length=10)
+    placa: Texto | None = Field(default=None, max_length=10)
     ano_fabricacao: int = Field(default=None, ge=1886, le=2027)
     ano_modelo: int = Field(default=None, ge=1886, le=2027)
     km_atual: int = Field(default=None, ge=0, le=6000000)
@@ -134,7 +144,7 @@ class ItemOrcamentoCriar(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     id_categoria: int = Field(gt=0, le=2147483647)
-    descricao: str = Field(min_length=1, max_length=255)
+    descricao: Texto = Field(min_length=1, max_length=255)
     tipo: TipoItemEnum
     quantidade: Decimal = Field(
         gt=0, max_digits=10, decimal_places=2, allow_inf_nan=False
@@ -161,7 +171,7 @@ class UsuarioResposta(BaseModel):
 class UsuarioCriar(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    nome: str = Field(min_length=2, max_length=100)
+    nome: Texto = Field(min_length=2, max_length=100)
     email: EmailStr = Field(min_length=6, max_length=150)
     senha: str = Field(min_length=8, max_length=128)
 
