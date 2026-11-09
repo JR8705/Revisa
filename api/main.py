@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from api.alertas import gerar_alertas
 from api.database import engine
 from api.enums import FontePrecoEnum, StatusOrcamentoEnum
-from api.erros import validacao_sem_input
+from api.erros import erro_422, validacao_sem_input
 from api.models import (
     CategoriaItem,
     ItemOrcamento,
@@ -36,6 +36,7 @@ from api.schemas import (
     OrcamentoDetalheResposta,
     OrcamentoResposta,
     OrcamentoStatusAtualizar,
+    Texto,
     TokenResposta,
     UsuarioCriar,
     UsuarioResposta,
@@ -111,7 +112,7 @@ def get_id_veiculo(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
 
 @app.get("/veiculos/placa/{veiculo_placa}", response_model=list[VeiculoResposta])
 def get_veiculo_placa(
-    veiculo_placa: Annotated[str, Path(max_length=10)], id_usuario_validado: IdUsuario
+    veiculo_placa: Annotated[Texto, Path(max_length=10)], id_usuario_validado: IdUsuario
 ):
 
     placa_tratada = veiculo_placa.strip().upper()
@@ -148,9 +149,7 @@ def veiculo_criar(dados_veiculo: VeiculoCriar, id_usuario_validado: IdUsuario):
         except IntegrityError:
             session.rollback()
             # print(e)  TODO S6: usar logging
-            raise HTTPException(
-                status_code=422, detail="Dados recusados pelo banco."
-            ) from None
+            raise erro_422("Dados recusados pelo banco.") from None
 
         session.refresh(veiculo_novo)
         return veiculo_novo
@@ -185,18 +184,16 @@ def veiculo_alterar(
             veiculo_existente.ano_fabricacao, veiculo_existente.ano_modelo
         ):
             session.rollback()
-            raise HTTPException(
-                status_code=422,
-                detail="O ano do modelo deve ser igual ao de fabricação ou no máximo 1 ano maior",
+            raise erro_422(
+                "O ano do modelo deve ser igual ao de fabricação ou no máximo 1 ano maior",
+                "ano_modelo",
             )
 
         if not combustivel_valido(
             veiculo_existente.combustivel, veiculo_existente.cilindrada
         ):
             session.rollback()
-            raise HTTPException(
-                status_code=422, detail="Veículo elétrico não tem cilindrada."
-            )
+            raise erro_422("Veículo elétrico não tem cilindrada.", "cilindrada")
 
         try:
             session.commit()
@@ -204,9 +201,7 @@ def veiculo_alterar(
         except IntegrityError:
             session.rollback()
             # print(e) TODO S6: usar logging
-            raise HTTPException(
-                status_code=422, detail="Dados recusados pelo banco."
-            ) from None
+            raise erro_422("Dados recusados pelo banco.") from None
 
         session.refresh(veiculo_existente)
         return veiculo_existente
@@ -310,7 +305,7 @@ def orcamento_criar(
 
         check_oficina = session.get(Oficina, dados["id_oficina"])
         if check_oficina is None:
-            raise HTTPException(status_code=422, detail="Oficina inválida.")
+            raise erro_422("Oficina inválida.", "id_oficina")
 
         orcamento = Orcamento(id_veiculo=veiculo.id, **dados)
 
@@ -322,7 +317,7 @@ def orcamento_criar(
         except IntegrityError:
             session.rollback()
             # print(e) TODO S6: usar logging
-            raise HTTPException(status_code=422, detail="Oficina inválida.") from None
+            raise erro_422("Oficina inválida.", "id_oficina") from None
 
         session.refresh(orcamento)
         return orcamento
@@ -436,7 +431,7 @@ def item_criar(
 
         categoria = session.get(CategoriaItem, item_dados.id_categoria)
         if not categoria:
-            raise HTTPException(status_code=422, detail="Categoria inválida.")
+            raise erro_422("Categoria inválida.", "id_categoria")
 
         dados = item_dados.model_dump()
         novo_item = ItemOrcamento(id_orcamento=orcamento.id, **dados)
@@ -447,9 +442,7 @@ def item_criar(
             session.refresh(novo_item)
         except IntegrityError:
             session.rollback()
-            raise HTTPException(
-                status_code=422, detail="Dados do item inválidos."
-            ) from None
+            raise erro_422("Dados do item inválidos.") from None
 
         return item_resposta(novo_item)
 

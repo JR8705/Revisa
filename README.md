@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 360 testes automatizados (pytest) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 397 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos e dependências) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
 
 ## O problema
 
@@ -66,7 +66,8 @@ Já funcionam: `MAO_OBRA_ALTA`, `ITEM_DUPLICADO`, `VALOR_ZERADO`, `PRECO_ACIMA_M
 | Segurança | argon2 (hash de senha), PyJWT (token), email-validator |
 | Qualidade | ruff (lint e formatação), configurado no `pyproject.toml` |
 | Testes | pytest e pytest-cov, contra um PostgreSQL real |
-| Infraestrutura | GitHub Actions (ruff + pytest a cada push); Docker planejado |
+| Segurança do pipeline | pre-commit, gitleaks, pip-audit, Schemathesis, regras `S` do ruff, Dependabot (ver [Segurança do pipeline](#segurança-do-pipeline)) |
+| Infraestrutura | GitHub Actions (ruff, pytest e verificações de segurança a cada push); Docker planejado |
 
 ## Como rodar o banco
 
@@ -96,13 +97,20 @@ source .venv/bin/activate       # Linux e macOS
 pip install -r requirements.txt
 ```
 
-Para desenvolver (ruff, pytest e as bibliotecas dos testes), use `pip install -r requirements_dev.txt`, que já inclui o `requirements.txt`. Antes de cada commit:
+Para desenvolver (ruff, pytest, Schemathesis, pre-commit e as bibliotecas dos testes), use `pip install -r requirements_dev.txt`, que já inclui o `requirements.txt`. Uma vez por clone, instale os ganchos do pre-commit (o gitleaks precisa estar no `PATH`; no Windows: `winget install Gitleaks.Gitleaks`):
 
 ```bash
-ruff check . --fix
-ruff format .
+pre-commit install              # ruff e gitleaks passam a rodar sozinhos em cada commit
+pre-commit run --all-files      # confere o repositório inteiro uma vez
+```
+
+Antes de cada commit:
+
+```bash
 pytest
 ```
+
+Se o ruff corrigir um arquivo, o commit falha na primeira vez: `git add` de novo e repita. Se o gitleaks barrar, o arquivo tem um segredo: tire o segredo, **nunca use `--no-verify`**.
 
 As regras do ruff ficam no `pyproject.toml` (as mesmas que o CI usa). Como rodar os testes: ver [Testes automatizados](#testes-automatizados).
 
@@ -558,6 +566,7 @@ Os testes ficam em `tests/` e usam pytest com o `TestClient` do FastAPI: a API r
 ```bash
 pytest                       # tudo (cerca de 1min30)
 pytest -m "not lento"        # pula a corrida com threads e a medição de tempo do login
+pytest -m "not fuzz"         # pula o fuzzing (Schemathesis e byte nulo)
 pytest tests/test_aprovacao.py -v
 pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 ```
@@ -574,6 +583,7 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_alertas_api.py` | a rota de alertas: resposta, os 14 orçamentos do seed, teto só da fonte `MANUAL`, troca recente (status, data, outro veículo, outro usuário), ids adulterados, tokens forjados e IDOR |
 | `test_formatos.py`, `test_enums.py` | formatação de valores e meses; enums do Python iguais aos do banco |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
+| `test_fuzz.py` | fuzzing gerado pelo Schemathesis a partir do `/openapi.json` (nenhum 500, resposta dentro do schema) e o byte nulo em todo campo de texto |
 
 Como os testes foram montados:
 
@@ -595,14 +605,46 @@ psql -d bdrevisa_teste -f database/schema.sql
 psql -d bdrevisa_teste -f database/seed.sql
 ```
 
-**CI (`.github/workflows/ci.yml`).** A cada push e pull request, o GitHub Actions roda dois jobs:
+**CI (`.github/workflows/ci.yml`).** A cada push e pull request, o GitHub Actions roda três jobs:
 
 | Job | O que faz |
 |---|---|
 | `lint` | `ruff check` e `ruff format --check` |
-| `test` | sobe um PostgreSQL 16 limpo como serviço, carrega `schema.sql` + `seed.sql`, gera um `JWT_SECRET` descartável (`openssl rand -hex 32`) e roda `pytest` com relatório de cobertura |
+| `test` | sobe um PostgreSQL 16 limpo como serviço, carrega `schema.sql` + `seed.sql`, gera um `JWT_SECRET` descartável (`openssl rand -hex 32`) e roda `pytest` (fuzzing incluído) com relatório de cobertura |
+| `seguranca` | `pip-audit` nas dependências fixadas e gitleaks em **todo o histórico** do Git (`fetch-depth: 0`) |
 
-Cuidados de segurança do workflow: `permissions: contents: read` (o token do job só lê o repositório); gatilho `pull_request`, nunca `pull_request_target` (este roda código de fork com acesso aos segredos do repositório); nenhum segredo real cadastrado no GitHub (a senha do banco do CI só existe dentro do contêiner descartável); dependências com versão fixada no `requirements_dev.txt`, então o CI instala exatamente o que foi testado.
+Cuidados de segurança do workflow: `permissions: contents: read` (o token do job só lê o repositório); gatilho `pull_request`, nunca `pull_request_target` (este roda código de fork com acesso aos segredos do repositório); nenhum segredo real cadastrado no GitHub (a senha do banco do CI só existe dentro do contêiner descartável); dependências com versão fixada no `requirements_dev.txt`, então o CI instala exatamente o que foi testado; actions fixadas por **SHA do commit** (com a versão em comentário), porque uma tag como `@v5` pode ser movida para outro código; `persist-credentials: false` no checkout, para o token não ficar gravado no disco do job.
+
+### Segurança do pipeline
+
+O repositório é público, então o pipeline tenta impedir que um erro chegue a ele: segredo commitado, dependência com falha conhecida, código perigoso e entrada que derruba a API.
+
+| Camada | Ferramenta | Onde roda | O que barra |
+|---|---|---|---|
+| Segredos | gitleaks + regra própria `url-com-senha` (`.gitleaks.toml`) | pre-commit (só o que vai ser commitado) e CI (histórico inteiro) | token, chave e URL de banco com senha |
+| Código | ruff com as regras `S` (as do Bandit) | pre-commit e CI | `subprocess` com `shell=True`, `eval`, `assert` no código da `api/`, senha escrita no código |
+| Dependências | pip-audit | CI | biblioteca fixada no `requirements_dev.txt` com vulnerabilidade publicada |
+| Atualizações | Dependabot (`.github/dependabot.yml`) | GitHub, toda semana | dependência e action desatualizadas (abre PR, o CI testa) |
+| Entrada | Schemathesis (`tests/test_fuzz.py`) | CI e local | resposta 500 e resposta fora do contrato do `/openapi.json` |
+
+Decisões:
+
+- **gitleaks com regra própria:** as regras padrão pegam token do GitHub e chaves genéricas, mas **não pegaram** uma `DATABASE_URL` com senha (testado com um commit falso). A regra `url-com-senha` pega qualquer URL com usuário e senha antes do `@` (o formato da `DATABASE_URL`), exceto as senhas de exemplo (`postgres` do CI descartável, `SUA_SENHA` do `.env.example`, `pass` do `alembic.ini`).
+- **gitleaks no CI pelo binário,** com versão fixa e checksum SHA-256 conferido antes de rodar, em vez de uma action de terceiro (que pediria o `GITHUB_TOKEN`).
+- **`assert` liberado só em `tests/`:** com `python -O` todo `assert` some; uma checagem de segurança feita com `assert` na `api/` desapareceria em produção.
+- **O ruff `S` não entende português:** ele procura nomes como `password` e `secret`, então `senha = "..."` passa. Quem cobre esse caso é o gitleaks.
+- **Fuzzing com o token de um usuário do teste,** em duas rodadas por rota: ids sorteados (quase sempre 404, testa o caminho do intruso) e ids do próprio usuário (testa os corpos de verdade). Tudo o que o fuzzing cria é apagado no fim, e o contador de lixo continua valendo.
+
+Achados do fuzzing (08/11/2026), corrigidos neste PR:
+
+| Achado | Antes | Depois |
+|---|---|---|
+| Byte nulo (`\x00`) em `nome`, `marca`, `modelo`, `motor`, `placa`, `descricao` e na busca por placa: o PostgreSQL não aceita esse caractere em texto | **500** | 422 |
+| 422 das regras checadas na rota (anos, elétrico, oficina e categoria inválidas, dados recusados) com `detail` em texto, enquanto o `/openapi.json` promete uma lista | resposta fora do contrato | `detail` em lista, no mesmo formato da validação do Pydantic (`api/erros.py`, `erro_422`) |
+
+Para conferir que as verificações pegam o defeito, cada uma foi quebrada de propósito e desfeita: um commit com `DATABASE_URL` com senha (gitleaks barra no pre-commit e no histórico), uma dependência antiga com CVE (pip-audit falha), `shell=True` na `api/` (ruff `S602`) e o limite `le=2147483647` retirado do `IdCaminho` (o fuzzing derruba 7 rotas com 500, o mesmo achado R4 do red team, agora encontrado sozinho).
+
+**O que essas ferramentas não garantem:** pip-audit verde só quer dizer que nenhuma biblioteca tem falha **publicada**; o gitleaks só acha segredo com formato conhecido; o fuzzing não entende regra de negócio (IDOR, por exemplo, continua coberto pelos testes de posse). São prevenção, não prova de segurança.
 
 ### Bateria de segurança
 
@@ -731,6 +773,7 @@ Saída final do script original (máquina do autor): 54 checagens, todas OK. Na 
 | Botão Authorize do `/docs` | o Swagger envia o login como formulário, e o `POST /login` espera JSON: dá 422. Teste pelo `TestClient` ou por script | deploy |
 | Sem listagem, alteração ou exclusão de orçamentos e itens | só criar e consultar | próximas etapas |
 | Oficinas e categorias sem rota de cadastro | o cliente só escolhe entre as que já existem no banco (vêm do `seed.sql`) | quando o produto pedir |
+| 401, 404 e 409 fora do `/openapi.json` | as rotas só documentam 200/201 e 422; o fuzzing não confere o status code (`status_code_conformance`) | documentar `responses` nas rotas |
 
 ### Laboratório de SQL Injection
 
@@ -793,7 +836,7 @@ database/
 
 api/
  ├── main.py         aplicação FastAPI, rotas e a dependência usuario_atual
- ├── erros.py        resposta 422 sem ecoar o valor recebido
+ ├── erros.py        resposta 422 sem ecoar o valor recebido e erro_422 (422 no formato da validação)
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
  ├── config.py       configuração do token (lê JWT_SECRET do .env)
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
@@ -814,14 +857,17 @@ tests/
  └── test_*.py       testes por assunto (ver Testes automatizados)
 
 .github/workflows/
- └── ci.yml          GitHub Actions: ruff + pytest com PostgreSQL de serviço
+ ├── ci.yml          GitHub Actions: ruff, pytest com PostgreSQL de serviço e segurança (pip-audit + gitleaks)
+ └── dependabot.yml  atualizações semanais de dependências e actions
 
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 
 requirements.txt     dependências da API com as versões fixadas
-requirements_dev.txt dependências de desenvolvimento (ruff, pytest, cliente HTTP dos testes); inclui o requirements.txt
+requirements_dev.txt dependências de desenvolvimento (ruff, pytest, Schemathesis, pre-commit); inclui o requirements.txt
 pyproject.toml       configuração do pytest, da cobertura e do ruff
+.pre-commit-config.yaml  ganchos de commit: ruff e gitleaks
+.gitleaks.toml       regras do gitleaks (padrão + URL com senha)
 .env.example         modelo das variáveis de ambiente (copiar para .env)
 alembic.ini          configuração do Alembic (sem senha)
 ```
@@ -840,6 +886,7 @@ alembic.ini          configuração do Alembic (sem senha)
 - [x] Motor de alertas: troca recente e preço acima da referência
 - [ ] Comparador de orçamentos e aprovação
 - [x] Testes automatizados (pytest) e CI (GitHub Actions)
+- [x] Segurança do pipeline (pre-commit, gitleaks, pip-audit, fuzzing)
 - [ ] Deploy
 
 ## Autor

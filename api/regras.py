@@ -40,3 +40,8 @@ def transicao_valida(atual, novo) -> bool:
     return (
         atual == StatusOrcamentoEnum.PENDENTE and novo != StatusOrcamentoEnum.PENDENTE
     )
+
+
+def texto_sem_nulo(texto):
+
+    return "\x00" not in texto
