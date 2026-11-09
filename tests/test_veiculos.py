@@ -139,7 +139,7 @@ def test_regra_do_eletrico_no_patch(client, fabrica, dois):
     url = f"/veiculos/{id_veiculo}"
 
     r = client.patch(url, json={"combustivel": "ELETRICO"}, headers=a)
-    assert (r.status_code, r.json()["detail"]) == (422, MSG_ELETRICO)
+    assert (r.status_code, r.json()["detail"][0]["msg"]) == (422, MSG_ELETRICO)
 
     r = client.patch(
         url, json={"combustivel": "ELETRICO", "cilindrada": None}, headers=a
@@ -147,7 +147,7 @@ def test_regra_do_eletrico_no_patch(client, fabrica, dois):
     assert r.status_code == 200
 
     r = client.patch(url, json={"cilindrada": "1.5"}, headers=a)
-    assert (r.status_code, r.json()["detail"]) == (422, MSG_ELETRICO)
+    assert (r.status_code, r.json()["detail"][0]["msg"]) == (422, MSG_ELETRICO)
 
 
 def test_sql_injection_na_marca_vira_texto(client, fabrica, dois):

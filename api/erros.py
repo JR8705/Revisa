@@ -1,4 +1,4 @@
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -12,3 +12,11 @@ async def validacao_sem_input(request: Request, exc: RequestValidationError):
     ]
 
     return JSONResponse(status_code=422, content={"detail": jsonable_encoder(erros)})
+
+
+def erro_422(mensagem, campo=None):
+    local = ["body", campo] if campo else ["body"]
+    return HTTPException(
+        status_code=422,
+        detail=[{"type": "value_error", "loc": local, "msg": mensagem}],
+    )
