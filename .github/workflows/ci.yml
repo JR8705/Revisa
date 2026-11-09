@@ -15,8 +15,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
       - run: pip install ruff==0.17.2
@@ -46,8 +48,10 @@ jobs:
       PGPASSWORD: postgres
       PGDATABASE: bdrevisa_teste
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
           cache: pip
@@ -60,3 +64,27 @@ jobs:
       - name: Gera um JWT_SECRET descartável
         run: echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
       - run: pytest -v --cov --cov-report=term-missing
+
+  seguranca:
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSAO: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14"
+      - run: pip install pip-audit==2.10.1
+      - name: Dependências sem vulnerabilidade conhecida
+        run: pip-audit -r requirements_dev.txt --strict --progress-spinner off
+      - name: Instala o gitleaks (versão fixa, checksum conferido)
+        run: |
+          curl -sSfL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSAO}/gitleaks_${GITLEAKS_VERSAO}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum --check
+          tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
+      - name: Segredos no histórico inteiro
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner .'
