@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: f368fb366ff7f2f808dd324b83a6d32267799e19  # v0.17.2, a mesma do CI
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: gitleaks
+        name: gitleaks (segredos no que vai ser commitado)
+        entry: gitleaks git --pre-commit --redact --staged --verbose
+        language: system
+        pass_filenames: false

@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "url-com-senha"
+description = "URL de conexão com senha (ex.: DATABASE_URL)"
+regex = '''[a-z][a-z0-9+.-]*://[^:/\s@'"]+:([^@/\s'"]{3,})@'''
+secretGroup = 1
+
+[[rules.allowlists]]
+description = "Senhas de exemplo e do CI descartável"
+regexes = ['''^(postgres|SUA_SENHA|pass)$''']
