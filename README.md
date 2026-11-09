@@ -891,4 +891,4 @@ alembic.ini          configuração do Alembic (sem senha)
 
 ## Autor
 
-Wellington Strehle — projeto pessoal de estudo e portfólio.
+Wellington Strehle — projeto pessoal de estudo e portfólio.
