@@ -62,7 +62,7 @@ def test_login_correto(client, conta):
     r = login(client, conta[0], SENHA)
     assert r.status_code == 200
     dados = r.json()
-    assert dados["token_type"] == "bearer"
+    assert dados["token_type"] == "bearer"  # noqa: S105
     assert ler_token(dados["access_token"]) == id_do_token(conta[1])
 
 
