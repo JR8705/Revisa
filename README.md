@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 397 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos e dependências) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 437 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos e dependências) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
 
 ## O problema
 
@@ -169,8 +169,8 @@ Com o servidor rodando, a documentação interativa da API fica em `http://127.0
 | Rota | Autenticação | Descrição |
 |---|---|---|
 | `GET /` | não | Verifica se a API está no ar |
-| `POST /usuarios` | não | Cadastra um usuário (201) |
-| `POST /login` | não | Troca e-mail e senha por um token (200) |
+| `POST /usuarios` | não | Cadastra um usuário (201); 429 acima de 5 tentativas por hora do mesmo IP |
+| `POST /login` | não | Troca e-mail e senha por um token (200); 429 depois de 5 falhas no mesmo e-mail |
 | `GET /veiculos/{veiculo_id}` | **token** | Busca um veículo do usuário logado pelo identificador |
 | `GET /veiculos/placa/{veiculo_placa}` | **token** | Busca veículos do usuário logado pela placa (até 10 caracteres; aceita minúsculas e espaços nas pontas) |
 | `POST /veiculos` | **token** | Cadastra um veículo para o usuário logado (201) |
@@ -231,11 +231,38 @@ Decisões:
 - **Senha nunca é guardada:** o banco guarda só o hash **argon2id** (com salt, lento de propósito). A resposta nunca devolve a senha nem o hash. `argon2.verify` levanta exceção quando a senha não confere; ela é tratada e vira `False`.
 - **Mensagem única no login:** e-mail inexistente e senha errada devolvem o mesmo 401 com a mesma mensagem, para o atacante não descobrir quais e-mails existem.
 - **Tempo igual nos dois casos:** com e-mail inexistente, a API confere a senha contra um hash falso (argon2 de verdade, gerado uma vez na inicialização), então a resposta leva o mesmo tempo. Medido: 0,063 s com senha errada contra 0,060 s com e-mail inexistente.
-- **Cadastro revela e-mail repetido (409):** decisão de produto, porque o usuário precisa saber que já tem conta. O custo é que um atacante pode testar quais e-mails existem pelo cadastro; a mitigação (limite de tentativas) está nas limitações.
+- **Cadastro revela e-mail repetido (409):** decisão de produto, porque o usuário precisa saber que já tem conta. O custo é que um atacante pode testar quais e-mails existem pelo cadastro; a mitigação é o limite de tentativas por IP (ver [Limite de tentativas](#limite-de-tentativas)).
 - **POST para o login:** as credenciais vão no corpo, e não na URL, que fica registrada em logs.
 - **Token JWT (HS256, 30 minutos):** o `sub` é o id do usuário em texto, o `exp` é obrigatório e a leitura só aceita o algoritmo esperado (bloqueia o ataque `alg: none`). O segredo vem do `.env`.
 - **Dependência `usuario_atual`:** lê o token, valida, e **consulta o banco** para confirmar que o usuário ainda existe. Se o usuário foi apagado, o token deixa de valer na hora. Token ausente, adulterado, expirado, sem `exp`, com outro segredo, com `sub` que não é número ou de usuário apagado: todos devolvem o mesmo 401.
 - **Dono do veículo vem do token:** `id_usuario` não existe mais no corpo (enviá-lo dá 422). Toda consulta de veículo filtra pelo dono **dentro do `WHERE`**, então o veículo alheio simplesmente não existe para quem pergunta. O erro é 404 e não 403, para não confirmar que o veículo existe.
+
+### Limite de tentativas
+
+Login e cadastro contam as tentativas e respondem **429** com o cabeçalho `Retry-After` (segundos até liberar) quando o limite estoura.
+
+| Rota | O que conta | Limite |
+|---|---|---|
+| `POST /login` | falhas por e-mail | 5 a cada 15 minutos |
+| `POST /login` | falhas por IP | 20 a cada 15 minutos |
+| `POST /usuarios` | toda tentativa por IP | 5 por hora |
+
+```
+pedido → tentar (checa e registra na mesma trava) → bloqueado: 429, sem conferir a senha
+                                                  → liberado: login normal → sucesso: zera o e-mail e devolve a tentativa do IP
+```
+
+A regra é uma função pura em `api/regras.py` (`tentativas_recentes` e `espera_em_segundos`); o `api/limite.py` guarda os momentos em memória, atrás de uma trava.
+
+Decisões:
+
+- **O 429 vem antes do argon2:** a requisição bloqueada não gasta hash. Nem a senha certa passa durante o bloqueio, senão o atacante saberia que acertou.
+- **E-mail inexistente bloqueia igual:** a falha é contada para qualquer e-mail. Se só contasse para contas que existem, o 429 revelaria quais existem.
+- **Tentativa bloqueada não conta:** quem insiste durante o bloqueio não o renova; ele acaba 15 minutos depois da falha mais antiga.
+- **Sucesso zera o e-mail, não o IP:** se zerasse o IP, quem tem uma conta válida intercalaria o próprio login para testar uma senha comum em contas alheias sem parar (*password spraying*). O login certo só devolve a própria tentativa.
+- **Checar e registrar na mesma trava:** a primeira versão checava, conferia a senha e só então registrava a falha. Trinta logins simultâneos passavam todos pela checagem (30 respostas 401, nenhum 429). É a mesma corrida (TOCTOU) da aprovação de orçamento. Hoje a tentativa é registrada na entrada: a mesma rajada dá 5 respostas 401 e 25 respostas 429.
+- **No máximo 2 hashes ao mesmo tempo:** cada argon2 usa cerca de 64 MiB. A rajada de 30 levava o processo a cerca de 2 GB; com o semáforo (`vagas_hash`), o pico medido foi de 219 MB.
+- **IP da conexão:** o limite usa o endereço da conexão e ignora `X-Forwarded-For`, que o cliente pode forjar. Atrás de um proxy isso precisa mudar (ver limitações).
 
 ### Como a API acessa o banco
 
@@ -263,7 +290,7 @@ Segurança das consultas:
 - **Validação de entrada:** a placa é limitada a 10 caracteres com `Path(max_length=10)`. Uma entrada maior recebe 422 antes de qualquer acesso ao banco.
 - **Parâmetros automáticos:** as consultas são montadas com `select(...).where(...)`, e o SQLAlchemy envia os valores como parâmetros, separados do comando, o que impede SQL Injection.
 - **Lista branca na resposta:** o `response_model` só deixa sair os campos do schema. Dados internos (`id_usuario`, `senha_hash`) e pessoais (`placa`) nunca chegam ao cliente.
-- **Erros genéricos:** a resposta de erro não revela detalhes do banco; o motivo de uma falha aparece apenas no terminal do servidor.
+- **Erros genéricos:** a resposta de erro não revela detalhes do banco; o log do servidor (`api/registros.py`) registra a rota, o tipo do erro e o nome da restrição violada, nunca os parâmetros da consulta.
 
 As camadas são complementares (defesa em profundidade): o limite de tamanho barra entradas absurdas, mas não é a proteção contra SQL Injection. Um ataque curto como `'OR 1=1--` cabe em 10 caracteres e chega ao banco, onde o parâmetro o transforma em uma busca inofensiva (404).
 
@@ -582,6 +609,8 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_alertas_historico.py` | regras puras do preço acima do teto e da troca recente: limites, unitário × subtotal, troca mais recente, empate, intervalos só de meses e ordem final |
 | `test_alertas_api.py` | a rota de alertas: resposta, os 14 orçamentos do seed, teto só da fonte `MANUAL`, troca recente (status, data, outro veículo, outro usuário), ids adulterados, tokens forjados e IDOR |
 | `test_formatos.py`, `test_enums.py` | formatação de valores e meses; enums do Python iguais aos do banco |
+| `test_limite.py` | limite de tentativas: regra pura, 429 no login e no cadastro, e-mail inexistente, *password spraying*, cabeçalho de IP forjado, rajada simultânea e o semáforo do argon2 |
+| `test_registros.py` | o log dos erros do banco e do 429 não traz e-mail, senha nem a consulta |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
 | `test_fuzz.py` | fuzzing gerado pelo Schemathesis a partir do `/openapi.json` (nenhum 500, resposta dentro do schema) e o byte nulo em todo campo de texto |
 
@@ -758,10 +787,11 @@ Saída final do script original (máquina do autor): 54 checagens, todas OK. Na 
 
 | Limitação | Detalhe | Quando resolver |
 |---|---|---|
-| Sem limite de tentativas | login e cadastro aceitam tentativas ilimitadas (força bruta e teste de e-mails existentes) | S6 |
+| Limite de tentativas em memória | os contadores zeram quando a API reinicia e não são divididos entre processos: só vale com uma instância e um worker | S6 (armazenamento externo) |
+| IP atrás de proxy | o limite usa o IP da conexão. Atrás do proxy da hospedagem, todos os clientes chegam com o IP do proxy e dividiriam o mesmo contador | antes do deploy |
+| Bloqueio de conta alheia | quem sabe o e-mail de alguém consegue bloquear o login dessa pessoa por 15 minutos com 5 senhas erradas | aceito (custo do limite por e-mail) |
 | Token sem revogação | o token vale até expirar (30 min); não há logout nem refresh token. Usuário apagado é barrado na hora | futuro |
 | Senha só com espaços | uma senha de 8 espaços é aceita | revisar |
-| `print(e)` nos erros do banco | em produção deve ser log (e o `print` mostraria parâmetros da consulta) | S6 (`logging`) |
 | Mensagem do 409 do cadastro e do DELETE | supõem a causa sem checar | revisar quando outras tabelas apontarem para `veiculos` |
 | Arredondamento do banqueiro | os subtotais usam o padrão `ROUND_HALF_EVEN` do Python: `5.005` vira `5.00`. Pode divergir 1 centavo do valor impresso pela oficina. Decisão do autor: manter | revisar |
 | `data_emissao` sem piso | só barra datas futuras; uma data como `0001-01-01` é aceita | revisar |
@@ -836,9 +866,11 @@ database/
 
 api/
  ├── main.py         aplicação FastAPI, rotas e a dependência usuario_atual
- ├── erros.py        resposta 422 sem ecoar o valor recebido e erro_422 (422 no formato da validação)
+ ├── erros.py        resposta 422 sem ecoar o valor recebido, erro_422 (422 no formato da validação) e erro_429
  ├── database.py     conexão com o banco (lê DATABASE_URL do .env)
- ├── config.py       configuração do token (lê JWT_SECRET do .env)
+ ├── config.py       configuração do token (lê JWT_SECRET do .env) e os limites de tentativas
+ ├── limite.py       contador de tentativas em memória, IP do cliente e o semáforo do argon2
+ ├── registros.py    log dos erros do banco e do limite, sem dados pessoais
  ├── seguranca.py    hash de senha (argon2) e token (JWT)
  ├── enums.py        enums compartilhados (combustível, grupo, status, tipo de item, fonte de preço, tipo e severidade de alerta)
  ├── alertas.py      regras puras dos alertas do orçamento
