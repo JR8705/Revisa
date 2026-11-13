@@ -13,3 +13,9 @@ if len(JWT_SECRET) < 32:
     raise RuntimeError(
         "ERRO! O segredo deve ter pelo menos 32 caracteres. Configure no .env."
     )
+
+LIMITE_LOGIN_EMAIL = 5
+LIMITE_LOGIN_IP = 20
+JANELA_LOGIN = 15 * 60
+LIMITE_CADASTRO_IP = 5
+JANELA_CADASTRO = 60 * 60

@@ -20,3 +20,11 @@ def erro_422(mensagem, campo=None):
         status_code=422,
         detail=[{"type": "value_error", "loc": local, "msg": mensagem}],
     )
+
+
+def erro_429(espera):
+    return HTTPException(
+        status_code=429,
+        detail="Muitas tentativas. Tente novamente mais tarde.",
+        headers={"Retry-After": str(espera)},
+    )

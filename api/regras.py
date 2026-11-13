@@ -1,3 +1,4 @@
+import math
 from datetime import date
 from decimal import Decimal
 
@@ -45,3 +46,26 @@ def transicao_valida(atual, novo) -> bool:
 def texto_sem_nulo(texto):
 
     return "\x00" not in texto
+
+
+def tentativas_recentes(tentativas, agora, janela):
+
+    tentativas_validas = []
+
+    for momento in tentativas:
+        if agora - momento < janela:
+            tentativas_validas.append(momento)
+
+    return tentativas_validas
+
+
+def espera_em_segundos(tentativas, agora, limite, janela):
+
+    recentes = tentativas_recentes(tentativas, agora, janela)
+
+    if len(recentes) < limite:
+        return 0
+
+    mais_antiga = min(recentes)
+    tempo_espera = mais_antiga + janela - agora
+    return math.ceil(tempo_espera)

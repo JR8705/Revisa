@@ -5,19 +5,22 @@ from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 from api.config import JWT_ALGORITMO, JWT_EXPIRA_EM_MINUTOS, JWT_SECRET
+from api.limite import vagas_hash
 
 ph = PasswordHasher()
 
 
 def gerar_hash(senha):
 
-    return ph.hash(senha)
+    with vagas_hash:
+        return ph.hash(senha)
 
 
 def verificar_senha(senha, senha_hash):
 
     try:
-        ph.verify(senha_hash, senha)
+        with vagas_hash:
+            ph.verify(senha_hash, senha)
         return True
     except (VerifyMismatchError, InvalidHashError):
         return False
