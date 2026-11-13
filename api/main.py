@@ -28,6 +28,7 @@ from api.models import (
     Usuario,
     Veiculo,
 )
+from api.registros import avisar_erro_banco
 from api.regras import (
     ano_valido,
     calcular_subtotal,
@@ -154,9 +155,9 @@ def veiculo_criar(dados_veiculo: VeiculoCriar, id_usuario_validado: IdUsuario):
         try:
             session.commit()
 
-        except IntegrityError:
+        except IntegrityError as e:
             session.rollback()
-            # print(e)  TODO S6: usar logging
+            avisar_erro_banco("POST /veiculos", e)
             raise erro_422("Dados recusados pelo banco.") from None
 
         session.refresh(veiculo_novo)
@@ -206,9 +207,9 @@ def veiculo_alterar(
         try:
             session.commit()
 
-        except IntegrityError:
+        except IntegrityError as e:
             session.rollback()
-            # print(e) TODO S6: usar logging
+            avisar_erro_banco("PATCH /veiculos", e)
             raise erro_422("Dados recusados pelo banco.") from None
 
         session.refresh(veiculo_existente)
@@ -233,9 +234,9 @@ def veiculo_delete(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
         try:
             session.commit()
 
-        except IntegrityError:
+        except IntegrityError as e:
             session.rollback()
-            # print(e)  TODO S6: usar logging
+            avisar_erro_banco("DELETE /veiculos", e)
             raise HTTPException(
                 status_code=409,
                 detail="Veículo possui orçamentos vinculados. Não é possível apagar o veículo.",
@@ -247,10 +248,9 @@ def usuario_criar(dados_usuario: UsuarioCriar, request: Request):
 
     chave_ip = ("cadastro-ip", ip_do_cliente(request))
 
-    espera = tentativas.espera(chave_ip, LIMITE_CADASTRO_IP, JANELA_CADASTRO)
+    espera = tentativas.tentar([(chave_ip, LIMITE_CADASTRO_IP, JANELA_CADASTRO)])
     if espera > 0:
         raise erro_429(espera)
-    tentativas.registrar(chave_ip)
 
     with Session(engine) as session:
         usuario_tratado = dados_usuario.model_dump()
@@ -265,15 +265,15 @@ def usuario_criar(dados_usuario: UsuarioCriar, request: Request):
         try:
             session.commit()
 
-        except IntegrityError:
+        except IntegrityError as e:
             session.rollback()
-            # print(e) TODO S6: usar logging
+            avisar_erro_banco("POST /usuarios", e)
             raise HTTPException(
                 status_code=409, detail="E-mail já cadastrado."
             ) from None
 
         session.refresh(usuario_novo)
-    return usuario_novo
+        return usuario_novo
 
 
 @app.post("/login", response_model=TokenResposta, status_code=200)
@@ -283,9 +283,11 @@ def usuario_login(dados_usuario: LoginEntrada, request: Request):
     chave_email = ("login-email", email)
     chave_ip = ("login-ip", ip_do_cliente(request))
 
-    espera = max(
-        tentativas.espera(chave_email, LIMITE_LOGIN_EMAIL, JANELA_LOGIN),
-        tentativas.espera(chave_ip, LIMITE_LOGIN_IP, JANELA_LOGIN),
+    espera = tentativas.tentar(
+        [
+            (chave_email, LIMITE_LOGIN_EMAIL, JANELA_LOGIN),
+            (chave_ip, LIMITE_LOGIN_IP, JANELA_LOGIN),
+        ]
     )
     if espera > 0:
         raise erro_429(espera)
@@ -297,8 +299,6 @@ def usuario_login(dados_usuario: LoginEntrada, request: Request):
     senha_ok = verificar_senha(dados_usuario.senha, hash_conferir)
 
     if not usuario or not senha_ok:
-        tentativas.registrar(chave_email)
-        tentativas.registrar(chave_ip)
         raise HTTPException(
             status_code=401,
             detail="E-mail ou senha incorretos.",
@@ -306,6 +306,7 @@ def usuario_login(dados_usuario: LoginEntrada, request: Request):
         )
 
     tentativas.limpar_chave(chave_email)
+    tentativas.devolver(chave_ip)
     return {"access_token": criar_token(usuario.id), "token_type": "bearer"}
 
 
@@ -341,9 +342,9 @@ def orcamento_criar(
         try:
             session.commit()
 
-        except IntegrityError:
+        except IntegrityError as e:
             session.rollback()
-            # print(e) TODO S6: usar logging
+            avisar_erro_banco("POST /orcamentos", e)
             raise erro_422("Oficina inválida.", "id_oficina") from None
 
         session.refresh(orcamento)
@@ -467,8 +468,9 @@ def item_criar(
             session.add(novo_item)
             session.commit()
             session.refresh(novo_item)
-        except IntegrityError:
+        except IntegrityError as e:
             session.rollback()
+            avisar_erro_banco("POST /itens", e)
             raise erro_422("Dados do item inválidos.") from None
 
         return item_resposta(novo_item)

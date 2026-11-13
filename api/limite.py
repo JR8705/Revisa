@@ -2,10 +2,12 @@ import threading
 import time
 
 from api.config import JANELA_CADASTRO, JANELA_LOGIN
+from api.registros import avisar_limite
 from api.regras import espera_em_segundos, tentativas_recentes
 
 JANELA_MAXIMA = max(JANELA_LOGIN, JANELA_CADASTRO)
 VARRER_A_CADA = 1000
+HASHES_SIMULTANEOS = 2
 
 
 class RegistroTentativas:
@@ -27,6 +29,32 @@ class RegistroTentativas:
             if self._registros % VARRER_A_CADA == 0:
                 self._varrer(agora)
 
+    def tentar(self, regras):
+        with self._trava:
+            agora = time.monotonic()
+            esperas = [
+                espera_em_segundos(self._momentos.get(chave, []), agora, limite, janela)
+                for chave, limite, janela in regras
+            ]
+            espera = max(esperas)
+            if espera > 0:
+                avisar_limite(
+                    regra[0][0] for regra, e in zip(regras, esperas, strict=True) if e
+                )
+                return espera
+            for chave, _, _ in regras:
+                self._momentos.setdefault(chave, []).append(agora)
+            self._registros += 1
+            if self._registros % VARRER_A_CADA == 0:
+                self._varrer(agora)
+            return 0
+
+    def devolver(self, chave):
+        with self._trava:
+            momentos = self._momentos.get(chave)
+            if momentos:
+                momentos.pop()
+
     def limpar_chave(self, chave):
         with self._trava:
             self._momentos.pop(chave, None)
@@ -45,6 +73,7 @@ class RegistroTentativas:
 
 
 tentativas = RegistroTentativas()
+vagas_hash = threading.BoundedSemaphore(HASHES_SIMULTANEOS)
 
 
 def ip_do_cliente(request):
