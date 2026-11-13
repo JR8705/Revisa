@@ -18,6 +18,7 @@ if engine.url.database != BANCO_DE_TESTE:
         returncode=2,
     )
 
+from api.limite import tentativas  # noqa: E402
 from api.main import app  # noqa: E402
 from api.models import CategoriaItem, ItemOrcamento, Orcamento, Usuario, Veiculo  # noqa: E402
 from api.seguranca import gerar_hash  # noqa: E402
@@ -38,6 +39,15 @@ def banco_sem_lixo():
     yield
     depois = contar_linhas()
     assert depois == antes, f"Os testes deixaram lixo no banco: {antes} -> {depois}"
+
+
+@pytest.fixture(autouse=True)
+def limite_folgado(monkeypatch):
+    tentativas.limpar()
+    for nome in ("LIMITE_LOGIN_EMAIL", "LIMITE_LOGIN_IP", "LIMITE_CADASTRO_IP"):
+        monkeypatch.setattr(f"api.main.{nome}", 10_000)
+    yield
+    tentativas.limpar()
 
 
 @pytest.fixture(scope="session")
