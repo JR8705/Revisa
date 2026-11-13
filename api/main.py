@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi import Depends, FastAPI, HTTPException, Path, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import func, select
@@ -8,9 +8,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from api.alertas import gerar_alertas
+from api.config import (
+    JANELA_CADASTRO,
+    JANELA_LOGIN,
+    LIMITE_CADASTRO_IP,
+    LIMITE_LOGIN_EMAIL,
+    LIMITE_LOGIN_IP,
+)
 from api.database import engine
 from api.enums import FontePrecoEnum, StatusOrcamentoEnum
-from api.erros import erro_422, validacao_sem_input
+from api.erros import erro_422, erro_429, validacao_sem_input
+from api.limite import ip_do_cliente, tentativas
 from api.models import (
     CategoriaItem,
     ItemOrcamento,
@@ -235,7 +243,14 @@ def veiculo_delete(id_veiculo: IdCaminho, id_usuario_validado: IdUsuario):
 
 
 @app.post("/usuarios", response_model=UsuarioResposta, status_code=201)
-def usuario_criar(dados_usuario: UsuarioCriar):
+def usuario_criar(dados_usuario: UsuarioCriar, request: Request):
+
+    chave_ip = ("cadastro-ip", ip_do_cliente(request))
+
+    espera = tentativas.espera(chave_ip, LIMITE_CADASTRO_IP, JANELA_CADASTRO)
+    if espera > 0:
+        raise erro_429(espera)
+    tentativas.registrar(chave_ip)
 
     with Session(engine) as session:
         usuario_tratado = dados_usuario.model_dump()
@@ -258,13 +273,22 @@ def usuario_criar(dados_usuario: UsuarioCriar):
             ) from None
 
         session.refresh(usuario_novo)
-        return usuario_novo
+    return usuario_novo
 
 
 @app.post("/login", response_model=TokenResposta, status_code=200)
-def usuario_login(dados_usuario: LoginEntrada):
+def usuario_login(dados_usuario: LoginEntrada, request: Request):
 
     email = dados_usuario.email.strip().lower()
+    chave_email = ("login-email", email)
+    chave_ip = ("login-ip", ip_do_cliente(request))
+
+    espera = max(
+        tentativas.espera(chave_email, LIMITE_LOGIN_EMAIL, JANELA_LOGIN),
+        tentativas.espera(chave_ip, LIMITE_LOGIN_IP, JANELA_LOGIN),
+    )
+    if espera > 0:
+        raise erro_429(espera)
 
     with Session(engine) as session:
         usuario = session.scalars(select(Usuario).where(Usuario.email == email)).first()
@@ -273,12 +297,15 @@ def usuario_login(dados_usuario: LoginEntrada):
     senha_ok = verificar_senha(dados_usuario.senha, hash_conferir)
 
     if not usuario or not senha_ok:
+        tentativas.registrar(chave_email)
+        tentativas.registrar(chave_ip)
         raise HTTPException(
             status_code=401,
             detail="E-mail ou senha incorretos.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    tentativas.limpar_chave(chave_email)
     return {"access_token": criar_token(usuario.id), "token_type": "bearer"}
 
 
