@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 437 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos e dependências) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 453 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos, dependências e imagem Docker) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
 
 ## O problema
 
@@ -67,7 +67,7 @@ Já funcionam: `MAO_OBRA_ALTA`, `ITEM_DUPLICADO`, `VALOR_ZERADO`, `PRECO_ACIMA_M
 | Qualidade | ruff (lint e formatação), configurado no `pyproject.toml` |
 | Testes | pytest e pytest-cov, contra um PostgreSQL real |
 | Segurança do pipeline | pre-commit, gitleaks, pip-audit, Schemathesis, regras `S` do ruff, Dependabot (ver [Segurança do pipeline](#segurança-do-pipeline)) |
-| Infraestrutura | GitHub Actions (ruff, pytest e verificações de segurança a cada push); Docker planejado |
+| Infraestrutura | GitHub Actions (ruff, pytest e verificações de segurança a cada push); imagem Docker da API, varrida pelo trivy |
 
 ## Como rodar o banco
 
@@ -142,6 +142,33 @@ uvicorn api.main:app --reload
 ```
 
 **Usuários do seed:** o `seed.sql` traz usuários de exemplo com um hash de senha **inválido de propósito** (o repositório não publica credenciais). Eles existem para ser donos dos veículos de exemplo, mas **não fazem login**. Para testar a API, cadastre um usuário novo em `POST /usuarios`.
+
+### Rodar com Docker
+
+O `compose.yaml` sobe a API e um PostgreSQL só para uso local, já com o `schema.sql` e o `catalogo.sql` carregados. O `JWT_SECRET` vem do `.env`.
+
+```bash
+docker compose up --build -d
+docker compose exec api id      # uid=10001: a API não roda como root
+docker compose down -v          # desliga e apaga o banco local
+```
+
+A API fica em `http://127.0.0.1:8000/docs`, acessível só da própria máquina.
+
+Decisões da imagem (`Dockerfile`):
+
+- **Dois estágios:** o primeiro instala as dependências em um ambiente virtual; o segundo copia só esse ambiente, a `api/` e o `alembic/`. Ferramentas de desenvolvimento, testes e exercícios não entram.
+- **Lista branca no `.dockerignore`:** tudo é ignorado, menos o que a imagem precisa. O `.env` e o `.git` nunca chegam ao contexto do build, mesmo que alguém acrescente um `COPY . .` por engano.
+- **Usuário não root (`uid` 10001):** se uma falha na API permitir executar comandos, eles rodam sem privilégio. No `compose.yaml` o contêiner ainda tem sistema de arquivos somente leitura, nenhuma *capability* e limite de 512 MB de memória.
+- **Migrações na subida:** o contêiner roda `alembic upgrade head` antes do `uvicorn`. Em um banco criado pelo `schema.sql` as migrações não mudam nada, só registram a versão.
+- **Segredos fora da imagem:** `DATABASE_URL` e `JWT_SECRET` chegam por variável de ambiente.
+
+**Banco de produção:** `database/schema.sql` e depois `database/catalogo.sql` (oficinas, categorias e faixas de preço). O `seed.sql` é só para desenvolvimento e testes: ele apaga tudo e cria usuários de exemplo. O `tests/test_catalogo.py` confere que o catálogo continua igual às linhas do seed e que não apaga nada.
+
+| Variável | O que é |
+|---|---|
+| `PORT` | porta do `uvicorn` no contêiner (padrão 8000) |
+| `PROXIES_CONFIAVEIS` | quantos proxies de confiança existem na frente da API (padrão 0) |
 
 ### Migrações do banco (Alembic)
 
@@ -262,7 +289,7 @@ Decisões:
 - **Sucesso zera o e-mail, não o IP:** se zerasse o IP, quem tem uma conta válida intercalaria o próprio login para testar uma senha comum em contas alheias sem parar (*password spraying*). O login certo só devolve a própria tentativa.
 - **Checar e registrar na mesma trava:** a primeira versão checava, conferia a senha e só então registrava a falha. Trinta logins simultâneos passavam todos pela checagem (30 respostas 401, nenhum 429). É a mesma corrida (TOCTOU) da aprovação de orçamento. Hoje a tentativa é registrada na entrada: a mesma rajada dá 5 respostas 401 e 25 respostas 429.
 - **No máximo 2 hashes ao mesmo tempo:** cada argon2 usa cerca de 64 MiB. A rajada de 30 levava o processo a cerca de 2 GB; com o semáforo (`vagas_hash`), o pico medido foi de 219 MB.
-- **IP da conexão:** o limite usa o endereço da conexão e ignora `X-Forwarded-For`, que o cliente pode forjar. Atrás de um proxy isso precisa mudar (ver limitações).
+- **IP atrás de proxy:** por padrão o limite usa o endereço da conexão e ignora `X-Forwarded-For`, que o cliente pode forjar. Em hospedagem com proxy, todos os clientes chegam com o IP do proxy; aí a variável `PROXIES_CONFIAVEIS` diz quantos proxies de confiança existem, e a função pura `ip_do_pedido` conta essa quantidade **a partir do fim** do cabeçalho. O começo da lista é escrito por quem manda o pedido; o fim é anotado pelos proxies. Com o cabeçalho ausente ou mais curto que o esperado, vale o IP da conexão.
 
 ### Como a API acessa o banco
 
@@ -609,7 +636,8 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_alertas_historico.py` | regras puras do preço acima do teto e da troca recente: limites, unitário × subtotal, troca mais recente, empate, intervalos só de meses e ordem final |
 | `test_alertas_api.py` | a rota de alertas: resposta, os 14 orçamentos do seed, teto só da fonte `MANUAL`, troca recente (status, data, outro veículo, outro usuário), ids adulterados, tokens forjados e IDOR |
 | `test_formatos.py`, `test_enums.py` | formatação de valores e meses; enums do Python iguais aos do banco |
-| `test_limite.py` | limite de tentativas: regra pura, 429 no login e no cadastro, e-mail inexistente, *password spraying*, cabeçalho de IP forjado, rajada simultânea e o semáforo do argon2 |
+| `test_limite.py` | limite de tentativas: regra pura, 429 no login e no cadastro, e-mail inexistente, *password spraying*, cabeçalho de IP forjado, rajada simultânea, o semáforo do argon2 e o IP atrás de proxy |
+| `test_catalogo.py` | o `catalogo.sql` é igual às linhas do seed, sem dados de teste e sem comandos que apagam |
 | `test_registros.py` | o log dos erros do banco e do 429 não traz e-mail, senha nem a consulta |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
 | `test_fuzz.py` | fuzzing gerado pelo Schemathesis a partir do `/openapi.json` (nenhum 500, resposta dentro do schema) e o byte nulo em todo campo de texto |
@@ -641,6 +669,7 @@ psql -d bdrevisa_teste -f database/seed.sql
 | `lint` | `ruff check` e `ruff format --check` |
 | `test` | sobe um PostgreSQL 16 limpo como serviço, carrega `schema.sql` + `seed.sql`, gera um `JWT_SECRET` descartável (`openssl rand -hex 32`) e roda `pytest` (fuzzing incluído) com relatório de cobertura |
 | `seguranca` | `pip-audit` nas dependências fixadas e gitleaks em **todo o histórico** do Git (`fetch-depth: 0`) |
+| `imagem` | monta a imagem Docker, confere que ela não roda como root e varre com o trivy (falha em vulnerabilidade `CRITICAL` ou `HIGH` que já tem correção) |
 
 Cuidados de segurança do workflow: `permissions: contents: read` (o token do job só lê o repositório); gatilho `pull_request`, nunca `pull_request_target` (este roda código de fork com acesso aos segredos do repositório); nenhum segredo real cadastrado no GitHub (a senha do banco do CI só existe dentro do contêiner descartável); dependências com versão fixada no `requirements_dev.txt`, então o CI instala exatamente o que foi testado; actions fixadas por **SHA do commit** (com a versão em comentário), porque uma tag como `@v5` pode ser movida para outro código; `persist-credentials: false` no checkout, para o token não ficar gravado no disco do job.
 
@@ -653,6 +682,7 @@ O repositório é público, então o pipeline tenta impedir que um erro chegue a
 | Segredos | gitleaks + regra própria `url-com-senha` (`.gitleaks.toml`) | pre-commit (só o que vai ser commitado) e CI (histórico inteiro) | token, chave e URL de banco com senha |
 | Código | ruff com as regras `S` (as do Bandit) | pre-commit e CI | `subprocess` com `shell=True`, `eval`, `assert` no código da `api/`, senha escrita no código |
 | Dependências | pip-audit | CI | biblioteca fixada no `requirements_dev.txt` com vulnerabilidade publicada |
+| Imagem | trivy | CI | pacote do sistema ou biblioteca dentro da imagem Docker com vulnerabilidade `CRITICAL` ou `HIGH` que já tem correção; imagem rodando como root |
 | Atualizações | Dependabot (`.github/dependabot.yml`) | GitHub, toda semana | dependência e action desatualizadas (abre PR, o CI testa) |
 | Entrada | Schemathesis (`tests/test_fuzz.py`) | CI e local | resposta 500 e resposta fora do contrato do `/openapi.json` |
 
@@ -660,6 +690,7 @@ Decisões:
 
 - **gitleaks com regra própria:** as regras padrão pegam token do GitHub e chaves genéricas, mas **não pegaram** uma `DATABASE_URL` com senha (testado com um commit falso). A regra `url-com-senha` pega qualquer URL com usuário e senha antes do `@` (o formato da `DATABASE_URL`), exceto as senhas de exemplo (`postgres` do CI descartável, `SUA_SENHA` do `.env.example`, `pass` do `alembic.ini`).
 - **gitleaks no CI pelo binário,** com versão fixa e checksum SHA-256 conferido antes de rodar, em vez de uma action de terceiro (que pediria o `GITHUB_TOKEN`).
+- **trivy também pelo binário:** em março de 2026 as tags da action oficial do trivy foram reescritas para um código malicioso, e quem usava a action por tag executou esse código no próprio pipeline. Aqui o binário tem versão fixa e checksum conferido, e a versão escolhida já tinha semanas de uso.
 - **`assert` liberado só em `tests/`:** com `python -O` todo `assert` some; uma checagem de segurança feita com `assert` na `api/` desapareceria em produção.
 - **O ruff `S` não entende português:** ele procura nomes como `password` e `secret`, então `senha = "..."` passa. Quem cobre esse caso é o gitleaks.
 - **Fuzzing com o token de um usuário do teste,** em duas rodadas por rota: ids sorteados (quase sempre 404, testa o caminho do intruso) e ids do próprio usuário (testa os corpos de verdade). Tudo o que o fuzzing cria é apagado no fim, e o contador de lixo continua valendo.
@@ -788,7 +819,7 @@ Saída final do script original (máquina do autor): 54 checagens, todas OK. Na 
 | Limitação | Detalhe | Quando resolver |
 |---|---|---|
 | Limite de tentativas em memória | os contadores zeram quando a API reinicia e não são divididos entre processos: só vale com uma instância e um worker | S6 (armazenamento externo) |
-| IP atrás de proxy | o limite usa o IP da conexão. Atrás do proxy da hospedagem, todos os clientes chegam com o IP do proxy e dividiriam o mesmo contador | antes do deploy |
+| Quantidade de proxies | `PROXIES_CONFIAVEIS` precisa bater com a hospedagem: menor que o real, todos dividem o contador do proxy; maior, o cliente consegue forjar o IP | medir na publicação |
 | Bloqueio de conta alheia | quem sabe o e-mail de alguém consegue bloquear o login dessa pessoa por 15 minutos com 5 senhas erradas | aceito (custo do limite por e-mail) |
 | Token sem revogação | o token vale até expirar (30 min); não há logout nem refresh token. Usuário apagado é barrado na hora | futuro |
 | Senha só com espaços | uma senha de 8 espaços é aceita | revisar |
@@ -860,6 +891,7 @@ ALERTA! Item duplicado: bomba d'água
 database/
  ├── schema.sql      estrutura: tipos, tabelas, índices e restrições
  ├── seed.sql        dados iniciais e de teste (fictícios)
+ ├── catalogo.sql    catálogo do banco de produção (oficinas, categorias e faixas de preço)
  ├── queries.sql     consultas de validação com o resultado esperado
  ├── modelo.dbml     código-fonte do diagrama (dbdiagram.io)
  └── diagrama.png    diagrama do banco
@@ -889,12 +921,15 @@ tests/
  └── test_*.py       testes por assunto (ver Testes automatizados)
 
 .github/workflows/
- ├── ci.yml          GitHub Actions: ruff, pytest com PostgreSQL de serviço e segurança (pip-audit + gitleaks)
+ ├── ci.yml          GitHub Actions: ruff, pytest com PostgreSQL de serviço, segurança (pip-audit + gitleaks) e imagem (trivy)
  └── dependabot.yml  atualizações semanais de dependências e actions
 
 exercicios/
  └── analisador_orcamento.py   protótipo em terminal do cálculo e dos alertas
 
+Dockerfile           imagem da API (dois estágios, usuário não root)
+.dockerignore        lista branca do que entra na imagem
+compose.yaml         API + PostgreSQL para rodar localmente
 requirements.txt     dependências da API com as versões fixadas
 requirements_dev.txt dependências de desenvolvimento (ruff, pytest, Schemathesis, pre-commit); inclui o requirements.txt
 pyproject.toml       configuração do pytest, da cobertura e do ruff
