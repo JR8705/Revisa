@@ -68,15 +68,6 @@ async def root():
     return {"message": "Hello World"}
 
 
-@app.get("/diagnostico-ip", include_in_schema=False)
-def diagnostico_ip(request: Request):
-    return {
-        "conexao": request.client.host,
-        "encaminhado": request.headers.get("x-forwarded-for"),
-        "ip_usado": ip_do_cliente(request),
-    }
-
-
 def usuario_atual(token: str = Depends(esquema_oauth)):
     id_usuario = ler_token(token)
 
