@@ -69,3 +69,24 @@ def espera_em_segundos(tentativas, agora, limite, janela):
     mais_antiga = min(recentes)
     tempo_espera = mais_antiga + janela - agora
     return math.ceil(tempo_espera)
+
+
+def ip_do_pedido(ip_conexao, encaminhado, saltos):
+
+    if saltos == 0 or not encaminhado:
+        return ip_conexao
+
+    lista_salto = []
+    partes = encaminhado.split(",")
+
+    if len(partes) < saltos:
+        return ip_conexao
+
+    for item in partes:
+        lista_salto.append(item.strip())
+
+    resultado = lista_salto[-saltos]
+    if not resultado:
+        return ip_conexao
+
+    return resultado
