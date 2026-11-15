@@ -1,9 +1,9 @@
 import threading
 import time
 
-from api.config import JANELA_CADASTRO, JANELA_LOGIN
+from api.config import JANELA_CADASTRO, JANELA_LOGIN, PROXIES_CONFIAVEIS
 from api.registros import avisar_limite
-from api.regras import espera_em_segundos, tentativas_recentes
+from api.regras import espera_em_segundos, ip_do_pedido, tentativas_recentes
 
 JANELA_MAXIMA = max(JANELA_LOGIN, JANELA_CADASTRO)
 VARRER_A_CADA = 1000
@@ -79,4 +79,6 @@ vagas_hash = threading.BoundedSemaphore(HASHES_SIMULTANEOS)
 def ip_do_cliente(request):
     if request.client is None:
         return "desconhecido"
-    return request.client.host
+    return ip_do_pedido(
+        request.client.host, request.headers.get("x-forwarded-for"), PROXIES_CONFIAVEIS
+    )

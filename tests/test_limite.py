@@ -11,7 +11,7 @@ from api.limite import (
     RegistroTentativas,
     tentativas,
 )
-from api.regras import espera_em_segundos, tentativas_recentes
+from api.regras import espera_em_segundos, ip_do_pedido, tentativas_recentes
 from apoio import SENHA
 
 MENSAGEM = "Muitas tentativas. Tente novamente mais tarde."
@@ -57,6 +57,27 @@ def test_tentativas_recentes_nao_altera_a_lista_recebida():
     momentos = [10, 500, 950]
     tentativas_recentes(momentos, 1000, 900)
     assert momentos == [10, 500, 950]
+
+
+@pytest.mark.parametrize(
+    "encaminhado, saltos, esperado",
+    [
+        (None, 0, "10.0.0.1"),
+        ("1.2.3.4", 0, "10.0.0.1"),
+        ("1.2.3.4", 1, "1.2.3.4"),
+        ("9.9.9.9, 1.2.3.4", 1, "1.2.3.4"),
+        ("9.9.9.9, 1.2.3.4, 172.16.0.1", 2, "1.2.3.4"),
+        ("9.9.9.9,8.8.8.8, 1.2.3.4, 172.16.0.1", 2, "1.2.3.4"),
+        ("  9.9.9.9 ,  1.2.3.4  ", 1, "1.2.3.4"),
+        ("1.2.3.4", 2, "10.0.0.1"),
+        (None, 1, "10.0.0.1"),
+        ("", 1, "10.0.0.1"),
+        ("1.2.3.4, ", 1, "10.0.0.1"),
+        (" , 1.2.3.4", 2, "10.0.0.1"),
+    ],
+)
+def test_ip_do_pedido(encaminhado, saltos, esperado):
+    assert ip_do_pedido("10.0.0.1", encaminhado, saltos) == esperado
 
 
 @pytest.fixture
