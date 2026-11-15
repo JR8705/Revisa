@@ -1,0 +1,6 @@
+*
+!requirements.txt
+!alembic.ini
+!alembic
+!api
+**/__pycache__
