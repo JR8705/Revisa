@@ -2,8 +2,8 @@ FROM python:3.14-slim AS dependencias
 
 WORKDIR /app
 COPY requirements.txt .
-RUN python -m venv /venv \
-    && /venv/bin/pip install --no-cache-dir -r requirements.txt
+RUN python -m venv --without-pip /venv \
+    && pip --python /venv/bin/python install --no-cache-dir -r requirements.txt
 
 FROM python:3.14-slim
 
@@ -11,7 +11,11 @@ ENV PATH="/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN useradd --system --no-create-home --uid 10001 revisa
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip uninstall -y pip \
+    && useradd --system --no-create-home --uid 10001 revisa
 
 WORKDIR /app
 COPY --from=dependencias /venv /venv
