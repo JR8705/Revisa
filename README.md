@@ -170,6 +170,30 @@ Decisões da imagem (`Dockerfile`):
 | `PORT` | porta do `uvicorn` no contêiner (padrão 8000) |
 | `PROXIES_CONFIAVEIS` | quantos proxies de confiança existem na frente da API (padrão 0) |
 
+### Publicação (Render + Neon)
+
+A API está publicada no plano gratuito do [Render](https://render.com) (o contêiner deste `Dockerfile`) com o banco no plano gratuito do [Neon](https://neon.com) (PostgreSQL 16), os dois na mesma região (Virgínia, EUA). Custo zero; em troca, a API dorme depois de 15 minutos sem acesso e o primeiro pedido seguinte leva cerca de um minuto.
+
+| Decisão | Como ficou | Por quê |
+|---|---|---|
+| Banco | `schema.sql` + `catalogo.sql` carregados pelo editor de SQL do Neon | o `seed.sql` nunca vai para produção |
+| Conexão com o banco | direta (sem o *pooler* do Neon), com `sslmode=require` e o prefixo `postgresql+psycopg://` | o *pooler* troca de conexão a cada transação, o que não combina com as consultas preparadas do `psycopg` |
+| Segredos | `DATABASE_URL` e `JWT_SECRET` só no painel do Render; o `JWT_SECRET` foi sorteado lá | nenhum segredo de produção passa pelo repositório, pelo `.env` local ou pelo terminal |
+| Acesso ao GitHub | o Render enxerga só este repositório | se a conta da hospedagem for comprometida, o estrago para aqui |
+| Deploy | automático, **só depois de o CI passar** (`lint`, `test`, `seguranca`, `imagem`) | um commit com teste vermelho ou vulnerabilidade na imagem não chega ao ar |
+| Migrações | `alembic upgrade head` na subida do contêiner | o banco acompanha o código a cada deploy |
+
+**Medição do `PROXIES_CONFIAVEIS`:** uma rota temporária de diagnóstico (PRs #11 e #12, já removida) mostrou o `X-Forwarded-For` que chega à API. O Render acrescenta **dois** endereços depois do cliente (a Cloudflare e o proxy interno), então o cliente é o **terceiro a partir do fim**: `PROXIES_CONFIAVEIS=3`. Conferido com um cabeçalho forjado (`X-Forwarded-For: 9.9.9.9`): o endereço falso entra no começo da lista e é ignorado.
+
+| `PROXIES_CONFIAVEIS` | IP usado pelo limite | Efeito |
+|---|---|---|
+| 0 ou 1 | proxy interno do Render | todos os clientes dividem um contador |
+| 2 | servidor da Cloudflare | clientes do mesmo servidor dividem o contador |
+| **3** | **cliente** | **correto** |
+| 4 | o que o cliente escrever | o limite por IP deixa de valer |
+
+**Teste de fumaça (15/11/2026, na URL pública):** 401 sem token; cadastro de dois usuários e 409 no e-mail repetido; login dos dois; um usuário não lê o veículo do outro nem cria orçamento nele (404 nos dois casos); cinco logins errados dão 401 e o sexto dá 429 com `Retry-After`. Os dados do teste foram apagados em seguida.
+
 ### Migrações do banco (Alembic)
 
 As mudanças na estrutura do banco passam a ser feitas por migrações do Alembic, guardadas em `alembic/versions/` e aplicadas em ordem. O banco é criado pelo `schema.sql` e pelo `seed.sql`; a primeira migração (`162a0455a943`, "base: banco existente") está vazia e representa esse ponto de partida. Em um banco recém-criado pelo `schema.sql`, que já está na estrutura final, o comando é `alembic stamp head`, que apenas registra a versão na tabela `alembic_version`, sem executar nada:
@@ -819,7 +843,7 @@ Saída final do script original (máquina do autor): 54 checagens, todas OK. Na 
 | Limitação | Detalhe | Quando resolver |
 |---|---|---|
 | Limite de tentativas em memória | os contadores zeram quando a API reinicia e não são divididos entre processos: só vale com uma instância e um worker | S6 (armazenamento externo) |
-| Quantidade de proxies | `PROXIES_CONFIAVEIS` precisa bater com a hospedagem: menor que o real, todos dividem o contador do proxy; maior, o cliente consegue forjar o IP | medir na publicação |
+| Quantidade de proxies | `PROXIES_CONFIAVEIS` precisa bater com a hospedagem: menor que o real, todos dividem o contador do proxy; maior, o cliente consegue forjar o IP | medido em 15/11/2026: 3 no Render; medir de novo se a hospedagem mudar |
 | Bloqueio de conta alheia | quem sabe o e-mail de alguém consegue bloquear o login dessa pessoa por 15 minutos com 5 senhas erradas | aceito (custo do limite por e-mail) |
 | Token sem revogação | o token vale até expirar (30 min); não há logout nem refresh token. Usuário apagado é barrado na hora | futuro |
 | Senha só com espaços | uma senha de 8 espaços é aceita | revisar |
@@ -954,7 +978,7 @@ alembic.ini          configuração do Alembic (sem senha)
 - [ ] Comparador de orçamentos e aprovação
 - [x] Testes automatizados (pytest) e CI (GitHub Actions)
 - [x] Segurança do pipeline (pre-commit, gitleaks, pip-audit, fuzzing)
-- [ ] Deploy
+- [x] Deploy (Render + Neon)
 
 ## Autor
 
