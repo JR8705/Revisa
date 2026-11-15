@@ -88,3 +88,25 @@ jobs:
           tar -xzf gitleaks.tar.gz -C "$RUNNER_TEMP" gitleaks
       - name: Segredos no histórico inteiro
         run: '"$RUNNER_TEMP/gitleaks" git --redact --verbose --no-banner .'
+
+  
+  imagem:
+    runs-on: ubuntu-latest
+    env:
+      TRIVY_VERSAO: 0.76.1
+      TRIVY_SHA256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Monta a imagem
+        run: docker build -t revisa-api:ci .
+      - name: A imagem não roda como root
+        run: test "$(docker run --rm revisa-api:ci id -u)" = "10001"
+      - name: Instala o trivy (versão fixa, checksum conferido)
+        run: |
+          curl -sSfL -o trivy.tar.gz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSAO}/trivy_${TRIVY_VERSAO}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum --check
+          tar -xzf trivy.tar.gz -C "$RUNNER_TEMP" trivy
+      - name: Vulnerabilidades na imagem
+        run: '"$RUNNER_TEMP/trivy" image --exit-code 1 --severity CRITICAL,HIGH --ignore-unfixed --scanners vuln --no-progress revisa-api:ci'
