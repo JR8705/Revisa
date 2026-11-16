@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 453 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos, dependências e imagem Docker) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 455 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos, dependências e imagem Docker) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
 
 ## O problema
 
@@ -665,6 +665,7 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_registros.py` | o log dos erros do banco e do 429 não traz e-mail, senha nem a consulta |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
 | `test_fuzz.py` | fuzzing gerado pelo Schemathesis a partir do `/openapi.json` (nenhum 500, resposta dentro do schema) e o byte nulo em todo campo de texto |
+| `test_cabecalhos.py` | os cabeçalhos de segurança na resposta, em rota normal e em erro |
 
 Como os testes foram montados:
 
@@ -837,6 +838,34 @@ Os achados e as correções:
 - **R7, a corrida (TOCTOU, *time of check to time of use*):** as duas requisições liam `PENDENTE`, passavam pela `transicao_valida` e gravavam; as duas recebiam 200 e valia a última. A versão mais grave é aprovar enquanto um item entra: o item podia cair num orçamento já aprovado. Correção: a trava da linha descrita acima, nas duas rotas que mudam o orçamento.
 
 Saída final do script original (máquina do autor): 54 checagens, todas OK. Na migração para o pytest, o R7 passou a exigir, em cada rodada, exatamente um 200 e um 409.
+
+### Varredura com ZAP e sqlmap
+
+Depois da publicação, a API passou por duas ferramentas de ataque, rodadas da máquina do autor. Os scripts ficam em `exercicios/`, fora do Git: ferramenta de ataque não entra no repositório.
+
+- **OWASP ZAP 2.17.0** (imagem Docker oficial, fixada por *digest* SHA-256): varredura passiva e ativa contra o contêiner local, lendo o `/openapi.json`.
+- **sqlmap 1.10.11**: injeção de SQL nas rotas que recebem entrada do usuário, no nível máximo (`--level=5 --risk=3`).
+
+| Rodada | Alvo | Resultado |
+|---|---|---|
+| ZAP passivo | contêiner local | 2 cabeçalhos de segurança ausentes (achado real, corrigido abaixo) |
+| ZAP ativo (com token) | contêiner local | 0 falha; nenhuma rota devolveu 500; o schema recusou ~3.300 payloads com 422 |
+| sqlmap `--level=5 --risk=3` | `/veiculos/{id}` e `/veiculos/placa/{placa}` | não injetável; ~10.000 payloads por campo, barrados por tipo ou tamanho antes do banco |
+| ZAP passivo + sqlmap leve | URL pública | repetidos em produção (`--threads=1 --delay=1`), mesmos resultados |
+
+**Achado e correção (cabeçalhos de segurança).** A resposta não trazia três cabeçalhos que o navegador usa para se proteger. Um middleware em `api/main.py` passou a adicioná-los em toda resposta:
+
+| Cabeçalho | Para quê |
+|---|---|
+| `X-Content-Type-Options: nosniff` | o navegador não adivinha o tipo do conteúdo |
+| `Cross-Origin-Resource-Policy: same-origin` | outro site não lê a resposta |
+| `Strict-Transport-Security` | obriga HTTPS (vale em produção, que é HTTPS) |
+
+Depois da correção, a varredura passiva (local e em produção) não aponta mais nada. Cobertos por `tests/test_cabecalhos.py`.
+
+**O limite de tentativas como defesa visível:** durante a varredura ativa, as rotas de login e cadastro devolveram centenas de 429 — o limite bloqueou a própria ferramenta, como bloquearia um ataque de força bruta. A superfície de injeção (rotas autenticadas de leitura) não tem limite e foi testada à exaustão pelo sqlmap.
+
+Nenhuma das ferramentas achou injeção de SQL, XSS ou rota que devolvesse 500. O relatório detalhado desses testes será reunido em `docs/seguranca.md`.
 
 ### Limitações conhecidas
 
