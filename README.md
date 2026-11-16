@@ -865,7 +865,7 @@ Depois da correção, a varredura passiva (local e em produção) não aponta ma
 
 **O limite de tentativas como defesa visível:** durante a varredura ativa, as rotas de login e cadastro devolveram centenas de 429 — o limite bloqueou a própria ferramenta, como bloquearia um ataque de força bruta. A superfície de injeção (rotas autenticadas de leitura) não tem limite e foi testada à exaustão pelo sqlmap.
 
-Nenhuma das ferramentas achou injeção de SQL, XSS ou rota que devolvesse 500. O relatório detalhado desses testes será reunido em `docs/seguranca.md`.
+Nenhuma das ferramentas achou injeção de SQL, XSS ou rota que devolvesse 500. O relatório completo, com o cenário de cada ataque, as medições e os limites conhecidos, está em [`docs/seguranca.md`](docs/seguranca.md).
 
 ### Limitações conhecidas
 
