@@ -63,6 +63,21 @@ app.add_exception_handler(RequestValidationError, validacao_sem_input)
 esquema_oauth = OAuth2PasswordBearer(tokenUrl="/login")
 
 
+CABECALHOS_SEGURANCA = {
+    "X-Content-Type-Options": "nosniff",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+}
+
+
+@app.middleware("http")
+async def adicionar_cabecalhos_seguranca(request: Request, call_next):
+    resposta = await call_next(request)
+    for nome, valor in CABECALHOS_SEGURANCA.items():
+        resposta.headers.setdefault(nome, valor)
+    return resposta
+
+
 @app.get("/")
 async def root():
     return {"message": "Hello World"}

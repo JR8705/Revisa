@@ -4,7 +4,7 @@
 
 Aplicativo para registrar manutenções de veículos e **analisar orçamentos de oficina**: extrai os itens do orçamento, compara preços com o histórico e sinaliza cobranças suspeitas antes de você aprovar o serviço.
 
-> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 453 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos, dependências e imagem Docker) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
+> **Status:** em desenvolvimento. A modelagem do banco de dados está concluída; a API tem cadastro de usuário, login com token (JWT), o CRUD de veículos, o registro de orçamentos com itens e total calculado a aprovação ou recusa do orçamento e os alertas automáticos (mão de obra alta, item duplicado, valor zerado, preço acima da referência e troca recente). Cada usuário só enxerga e altera os próprios dados, inclusive os orçamentos, cujo dono vem do veículo. 455 testes automatizados (pytest, inclusive fuzzing com Schemathesis) e verificações de segurança (segredos, dependências e imagem Docker) rodam no GitHub Actions a cada push. As manutenções e o upload do orçamento ainda serão criados.
 
 ## O problema
 
@@ -169,6 +169,30 @@ Decisões da imagem (`Dockerfile`):
 |---|---|
 | `PORT` | porta do `uvicorn` no contêiner (padrão 8000) |
 | `PROXIES_CONFIAVEIS` | quantos proxies de confiança existem na frente da API (padrão 0) |
+
+### Publicação (Render + Neon)
+
+A API está publicada no plano gratuito do [Render](https://render.com) (o contêiner deste `Dockerfile`) com o banco no plano gratuito do [Neon](https://neon.com) (PostgreSQL 16), os dois na mesma região (Virgínia, EUA). Custo zero; em troca, a API dorme depois de 15 minutos sem acesso e o primeiro pedido seguinte leva cerca de um minuto.
+
+| Decisão | Como ficou | Por quê |
+|---|---|---|
+| Banco | `schema.sql` + `catalogo.sql` carregados pelo editor de SQL do Neon | o `seed.sql` nunca vai para produção |
+| Conexão com o banco | direta (sem o *pooler* do Neon), com `sslmode=require` e o prefixo `postgresql+psycopg://` | o *pooler* troca de conexão a cada transação, o que não combina com as consultas preparadas do `psycopg` |
+| Segredos | `DATABASE_URL` e `JWT_SECRET` só no painel do Render; o `JWT_SECRET` foi sorteado lá | nenhum segredo de produção passa pelo repositório, pelo `.env` local ou pelo terminal |
+| Acesso ao GitHub | o Render enxerga só este repositório | se a conta da hospedagem for comprometida, o estrago para aqui |
+| Deploy | automático, **só depois de o CI passar** (`lint`, `test`, `seguranca`, `imagem`) | um commit com teste vermelho ou vulnerabilidade na imagem não chega ao ar |
+| Migrações | `alembic upgrade head` na subida do contêiner | o banco acompanha o código a cada deploy |
+
+**Medição do `PROXIES_CONFIAVEIS`:** uma rota temporária de diagnóstico (PRs #11 e #12, já removida) mostrou o `X-Forwarded-For` que chega à API. O Render acrescenta **dois** endereços depois do cliente (a Cloudflare e o proxy interno), então o cliente é o **terceiro a partir do fim**: `PROXIES_CONFIAVEIS=3`. Conferido com um cabeçalho forjado (`X-Forwarded-For: 9.9.9.9`): o endereço falso entra no começo da lista e é ignorado.
+
+| `PROXIES_CONFIAVEIS` | IP usado pelo limite | Efeito |
+|---|---|---|
+| 0 ou 1 | proxy interno do Render | todos os clientes dividem um contador |
+| 2 | servidor da Cloudflare | clientes do mesmo servidor dividem o contador |
+| **3** | **cliente** | **correto** |
+| 4 | o que o cliente escrever | o limite por IP deixa de valer |
+
+**Teste de fumaça (15/11/2026, na URL pública):** 401 sem token; cadastro de dois usuários e 409 no e-mail repetido; login dos dois; um usuário não lê o veículo do outro nem cria orçamento nele (404 nos dois casos); cinco logins errados dão 401 e o sexto dá 429 com `Retry-After`. Os dados do teste foram apagados em seguida.
 
 ### Migrações do banco (Alembic)
 
@@ -641,6 +665,7 @@ pytest --cov --cov-report=term-missing   # mostra as linhas da api/ sem teste
 | `test_registros.py` | o log dos erros do banco e do 429 não traz e-mail, senha nem a consulta |
 | `test_seed.py` | dados do `seed.sql`: dono do veículo 1 e orçamento 3 = `2146.00` |
 | `test_fuzz.py` | fuzzing gerado pelo Schemathesis a partir do `/openapi.json` (nenhum 500, resposta dentro do schema) e o byte nulo em todo campo de texto |
+| `test_cabecalhos.py` | os cabeçalhos de segurança na resposta, em rota normal e em erro |
 
 Como os testes foram montados:
 
@@ -814,12 +839,40 @@ Os achados e as correções:
 
 Saída final do script original (máquina do autor): 54 checagens, todas OK. Na migração para o pytest, o R7 passou a exigir, em cada rodada, exatamente um 200 e um 409.
 
+### Varredura com ZAP e sqlmap
+
+Depois da publicação, a API passou por duas ferramentas de ataque, rodadas da máquina do autor. Os scripts ficam em `exercicios/`, fora do Git: ferramenta de ataque não entra no repositório.
+
+- **OWASP ZAP 2.17.0** (imagem Docker oficial, fixada por *digest* SHA-256): varredura passiva e ativa contra o contêiner local, lendo o `/openapi.json`.
+- **sqlmap 1.10.11**: injeção de SQL nas rotas que recebem entrada do usuário, no nível máximo (`--level=5 --risk=3`).
+
+| Rodada | Alvo | Resultado |
+|---|---|---|
+| ZAP passivo | contêiner local | 2 cabeçalhos de segurança ausentes (achado real, corrigido abaixo) |
+| ZAP ativo (com token) | contêiner local | 0 falha; nenhuma rota devolveu 500; o schema recusou ~3.300 payloads com 422 |
+| sqlmap `--level=5 --risk=3` | `/veiculos/{id}` e `/veiculos/placa/{placa}` | não injetável; ~10.000 payloads por campo, barrados por tipo ou tamanho antes do banco |
+| ZAP passivo + sqlmap leve | URL pública | repetidos em produção (`--threads=1 --delay=1`), mesmos resultados |
+
+**Achado e correção (cabeçalhos de segurança).** A resposta não trazia três cabeçalhos que o navegador usa para se proteger. Um middleware em `api/main.py` passou a adicioná-los em toda resposta:
+
+| Cabeçalho | Para quê |
+|---|---|
+| `X-Content-Type-Options: nosniff` | o navegador não adivinha o tipo do conteúdo |
+| `Cross-Origin-Resource-Policy: same-origin` | outro site não lê a resposta |
+| `Strict-Transport-Security` | obriga HTTPS (vale em produção, que é HTTPS) |
+
+Depois da correção, a varredura passiva (local e em produção) não aponta mais nada. Cobertos por `tests/test_cabecalhos.py`.
+
+**O limite de tentativas como defesa visível:** durante a varredura ativa, as rotas de login e cadastro devolveram centenas de 429 — o limite bloqueou a própria ferramenta, como bloquearia um ataque de força bruta. A superfície de injeção (rotas autenticadas de leitura) não tem limite e foi testada à exaustão pelo sqlmap.
+
+Nenhuma das ferramentas achou injeção de SQL, XSS ou rota que devolvesse 500. O relatório completo, com o cenário de cada ataque, as medições e os limites conhecidos, está em [`docs/seguranca.md`](docs/seguranca.md).
+
 ### Limitações conhecidas
 
 | Limitação | Detalhe | Quando resolver |
 |---|---|---|
 | Limite de tentativas em memória | os contadores zeram quando a API reinicia e não são divididos entre processos: só vale com uma instância e um worker | S6 (armazenamento externo) |
-| Quantidade de proxies | `PROXIES_CONFIAVEIS` precisa bater com a hospedagem: menor que o real, todos dividem o contador do proxy; maior, o cliente consegue forjar o IP | medir na publicação |
+| Quantidade de proxies | `PROXIES_CONFIAVEIS` precisa bater com a hospedagem: menor que o real, todos dividem o contador do proxy; maior, o cliente consegue forjar o IP | medido em 15/11/2026: 3 no Render; medir de novo se a hospedagem mudar |
 | Bloqueio de conta alheia | quem sabe o e-mail de alguém consegue bloquear o login dessa pessoa por 15 minutos com 5 senhas erradas | aceito (custo do limite por e-mail) |
 | Token sem revogação | o token vale até expirar (30 min); não há logout nem refresh token. Usuário apagado é barrado na hora | futuro |
 | Senha só com espaços | uma senha de 8 espaços é aceita | revisar |
@@ -954,7 +1007,7 @@ alembic.ini          configuração do Alembic (sem senha)
 - [ ] Comparador de orçamentos e aprovação
 - [x] Testes automatizados (pytest) e CI (GitHub Actions)
 - [x] Segurança do pipeline (pre-commit, gitleaks, pip-audit, fuzzing)
-- [ ] Deploy
+- [x] Deploy (Render + Neon)
 
 ## Autor
 
